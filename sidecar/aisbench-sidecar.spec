@@ -15,6 +15,10 @@ _ab_configs = os.path.join(_ab_pkg, 'benchmark', 'configs')
 if not os.path.isdir(_ab_configs):
     raise SystemExit(f'ais_bench configs dir not found: {_ab_configs}')
 
+# bundled tokenizer assets (../assets/model/<name>/...) if present
+_asset_model = os.path.join('..', 'assets', 'model')
+_asset_datas = [(_asset_model, 'assets/model')] if os.path.isdir(_asset_model) else []
+
 a = Analysis(
     ['run_sidecar.py'],
     pathex=['.'],
@@ -23,7 +27,7 @@ a = Analysis(
         ('app/templates', 'app/templates'),
         ('app/compat', 'app/compat'),
         (_ab_configs, 'ais_bench/benchmark/configs'),
-    ],
+    ] + _asset_datas,
     hiddenimports=[
         'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto',
         'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto',
