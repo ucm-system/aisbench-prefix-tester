@@ -222,13 +222,16 @@ def _execute(handle: RunHandle) -> None:
             child_mode = _is_child_mode(settings_cmd)
             pt_configs = run_dir / "pt_configs"
             (pt_configs / "models").mkdir(parents=True, exist_ok=True)
+            # child mode resolves configs via --config-dir (pt_configs);
+            # source mode resolves via the ais_bench package/workspace (work_path)
+            cfg_root = str(pt_configs) if child_mode else work_path
 
             # ---- phase 1: warmup (concurrency=dp, output_len=1) ----
             events.publish(run_id, "log", stream="stdout",
                            line=f"[Round {round_index}/{handle.total_rounds}] Phase 1 warmup: "
                                 f"concurrency={rc['dp']}, output_len=1")
             model_cfg_path = aisbench_env.write_model_config(
-                str(pt_configs),
+                cfg_root,
                 rc["model_path"], rc["model_name"], rc["host_ip"], rc["host_port"],
                 rc["url"], rc["dp"], 1, rc["request_rate"], rc["test_type"],
                 rc["enable_think"], rc.get("api_key", ""))
@@ -237,7 +240,7 @@ def _execute(handle: RunHandle) -> None:
             _shutil.copyfile(model_cfg_path, pt_configs / "models" / "vllm_api_chat_temp.py")
             ds_link = None
             if prefix_file:
-                ds_link = aisbench_env.link_dataset(pt_configs, prefix_file)
+                ds_link = aisbench_env.link_dataset(cfg_root, prefix_file)
             if child_mode:
                 ds_cfg_out = pt_configs / "datasets" / "gsm8k_gen_0_shot_cot_str_perf.py"
                 ds_cfg_out.parent.mkdir(parents=True, exist_ok=True)
@@ -249,6 +252,9 @@ def _execute(handle: RunHandle) -> None:
                                   "--models", "vllm_api_chat_temp",
                                   "--datasets", "gsm8k_gen_0_shot_cot_str_perf"]
                                  + base_args[4:])
+            else:
+                aisbench_args = aisbench_env.build_aisbench_command(
+                    cfg["summarizer"], str(run_dir / "results"))
             before = collector_snapshot()
             ret = _run_phase(handle, settings_cmd, aisbench_args, stdout_log, stderr_log, work_path)
             after = collector_snapshot()
@@ -274,14 +280,14 @@ def _execute(handle: RunHandle) -> None:
                            line=f"[Round {round_index}/{handle.total_rounds}] Phase 2 full: "
                                 f"concurrency={rc['concurrency']}, output_len={rc['output_len']}")
             model_cfg_path = aisbench_env.write_model_config(
-                str(pt_configs),
+                cfg_root,
                 rc["model_path"], rc["model_name"], rc["host_ip"], rc["host_port"],
                 rc["url"], rc["concurrency"], rc["output_len"], rc["request_rate"],
                 rc["test_type"], rc["enable_think"], rc.get("api_key", ""))
             import shutil as _shutil
             (pt_configs / "models").mkdir(parents=True, exist_ok=True)
             _shutil.copyfile(model_cfg_path, pt_configs / "models" / "vllm_api_chat_temp.py")
-            ds_link = aisbench_env.link_dataset(pt_configs, data_file)
+            ds_link = aisbench_env.link_dataset(cfg_root, data_file)
             if child_mode:
                 ds_cfg_out = pt_configs / "datasets" / "gsm8k_gen_0_shot_cot_str_perf.py"
                 ds_cfg_out.parent.mkdir(parents=True, exist_ok=True)

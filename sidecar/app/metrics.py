@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import re
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -99,6 +100,8 @@ def parse_metrics_text(text: str) -> dict[tuple, dict[str, float]]:
             value = float(value_raw)
         except ValueError:
             continue
+        if not math.isfinite(value):
+            continue  # NaN/inf would poison diffs and break JSONL/JSON round-trips
         bucket(engine, worker)[key] = bucket(engine, worker).get(key, 0.0) + value
         if name.startswith("ucm:"):
             bucket(engine, worker).setdefault("_ucm_seen", 1.0)

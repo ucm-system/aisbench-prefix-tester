@@ -197,6 +197,179 @@ def test_store_kinds_delete_sla_jobs():
     print("store kinds/delete/sla-jobs OK")
 
 
+def test_metrics_hit_rate():
+    """Δhits/Δqueries per pod/dp + aggregated + composite, and empty-snapshot safety."""
+    before = {("10.0.0.1", "0", "0"): {"hbm_q": 1000, "hbm_h": 100},
+              ("10.0.0.2", "1", "0"): {"hbm_q": 500, "hbm_h": 50, "ext_q": 200, "ext_h": 40}}
+    after = {("10.0.0.1", "0", "0"): {"hbm_q": 2000, "hbm_h": 1000},
+             ("10.0.0.2", "1", "0"): {"hbm_q": 700, "hbm_h": 70, "ext_q": 300, "ext_h": 90}}
+    r = metrics.compute_hit_rate(before, after)
+    dp0, dp1 = r["per_dp"]["dp0"], r["per_dp"]["dp1"]
+    assert dp0["hbm_queries"] == 1000 and dp0["hbm_hits"] == 900
+    assert dp0["hbm_hit_rate"] == 0.9
+    assert dp1["hbm_hit_rate"] == round(20 / 200, 6)
+    assert r["per_pod"]["10.0.0.1|dp0"]["hbm_hits"] == 900
+    assert r["per_pod"]["10.0.0.2|dp1"]["ext_hit_rate"] == 0.5
+    agg = r["aggregated"]
+    assert agg["hbm_hit_rate"] == round(920 / 1200, 6)
+    assert agg["composite_hit_rate"] == round(
+        agg["ext_hit_rate"] * (1 - agg["hbm_hit_rate"]) + agg["hbm_hit_rate"], 6)
+    # empty snapshots: no division errors, zeros out
+    empty = metrics.compute_hit_rate({}, {})
+    assert empty["aggregated"]["hbm_hit_rate"] == 0.0 and not empty["per_dp"]
+    # counters that only exist in `before` (reset mid-run) must not go negative-crash
+    neg = metrics.compute_hit_rate({("p", "0", "0"): {"hbm_q": 100}}, {})
+    assert neg["aggregated"]["hbm_queries"] == -100
+    print("metrics hit-rate OK")
+
+
+def test_parse_pod_and_metrics_text():
+    assert metrics.parse_pod_address("1.2.3.4:8101") == ("1.2.3.4", "8101")
+    assert metrics.parse_pod_address("[::1]:8101") == ("::1", "8101")
+    assert metrics.parse_pod_address("fd00::1:8101") == ("fd00::1", "8101")
+    text = """
+# HELP vllm:prefix_cache_queries_total queries
+vllm:prefix_cache_queries_total{model_name="q",engine="1",worker_rank="0"} 10
+vllm:prefix_cache_hits_total{model_name="q",engine="1",worker_rank="0"} 4
+vllm:prefix_cache_queries_total{model_name="q",engine="1",worker_rank="0"} 2
+ucm:posix_lookup_query_blocks_total{engine="1",worker_rank="0"} 7
+some_other_metric{engine="1"} 999
+broken line without value
+vllm:num_requests_running{engine="1",worker_rank="0"} NaN
+"""
+    series = metrics.parse_metrics_text(text)
+    assert set(series.keys()) == {("1", "0")}
+    c = series[("1", "0")]
+    assert c["hbm_q"] == 12 and c["hbm_h"] == 4  # same series summed
+    assert c["posix_q_blk"] == 7 and c.get("_ucm_seen") == 1.0
+    assert "running" not in c  # NaN skipped
+    assert "some_other_metric" not in c  # whitelist only
+    print("pod parse + metrics text OK")
+
+
+def test_parse_aisbench_log(tmp):
+    from app.result_parse import build_result_row, parse_aisbench_log, write_results
+    log = """[2026-09-20 16:09:47] Current exp folder: D:\\ws\\results\\20260920_160947
+│ Performance Parameters   │ Stage   │ Average        │ Min            │ Max            │ Median         │ P75            │ P90            │ P99            │  N  │
+│ TTFT                     │ total   │ 343.1 ms       │ 166.3 ms       │ 638.0 ms       │ 304.0 ms       │ 336.9 ms       │ 635.0 ms       │ 637.7 ms       │ 32  │
+│ TPOT                     │ total   │ 20.5 ms        │ 18.0 ms        │ 25.0 ms        │ 20.0 ms        │ 21.0 ms        │ 24.0 ms        │ 24.9 ms        │ 32  │
+│ E2EL                     │ total   │ 123.4 ms       │ 100.0 ms       │ 200.0 ms       │ 120.0 ms       │ 130.0 ms       │ 150.0 ms       │ 190.0 ms       │ 32  │
+Request Throughput (req/s): 11.8726
+Prefill Token Throughput: 12554.3482 token/s
+Output Token Throughput: 379.9217 token/s
+Total Requests: 32
+"""
+    p = Path(tmp) / "aisbench.log"
+    p.write_text(log, encoding="utf-8")
+    perf, log_dir = parse_aisbench_log(str(p), request_rate="0", npu_num=2)
+    assert log_dir.endswith("20260920_160947")
+    assert perf["ttft_avg_ms"] == 343.1 and perf["ttft_p90_ms"] == 635.0
+    assert perf["ttft_p99_ms"] == 637.7 and perf["ttft_min_ms"] == 166.3
+    assert perf["tpot_avg_ms"] == 20.5 and perf["e2el_avg_ms"] == 123.4
+    assert perf["output_token_throughput"] == 379.9217
+    assert perf["single_output_throughput"] == 379.9217 / 2
+    assert perf["request_throughput_qps"] == 11.8726
+    assert perf["request_throughput_qpm"] == 11.8726 * 60
+    assert perf["total_requests"] == 32
+    # missing file → defaults, no raise
+    perf2, _ = parse_aisbench_log(str(Path(tmp) / "nope.log"))
+    assert perf2["ttft_avg_ms"] == -1
+    # result row + CSV header merging across schema growth
+    hr = {"per_dp": {"dp0": {"hbm_hit_rate": 0.9, "hbm_queries": 100, "hbm_hits": 90,
+                             "ext_hit_rate": 0.1, "ext_queries": 10, "ext_hits": 1}},
+          "aggregated": {"hbm_hit_rate": 0.9, "hbm_queries": 100, "hbm_hits": 90,
+                         "ext_hit_rate": 0.1, "ext_queries": 10, "ext_hits": 1}}
+    params = {"input_len": 128, "concurrency": 4, "test_name": "t"}
+    row1 = build_result_row(perf, hr, params, phase="full", round_index=1, warnings="w1")
+    assert row1["hbm_hit_rate_dp0"] == 0.9 and row1["hbm_hit_rate_total"] == 0.9
+    assert row1["warnings"] == "w1"
+    run_dir = Path(tmp) / "rd"
+    csv1, jsonl1 = write_results(row1, str(run_dir))
+    row2 = build_result_row(perf, hr, {**params, "extra_metric_x": 1}, phase="full", round_index=2)
+    csv2, jsonl2 = write_results(row2, str(run_dir))
+    assert csv1 == csv2 and jsonl1 == jsonl2
+    import csv as _csv
+    with open(csv2, encoding="utf-8", newline="") as f:
+        rows = list(_csv.DictReader(f))
+    assert len(rows) == 2 and rows[0]["round"] == "1" and rows[1]["round"] == "2"
+    print("aisbench log parse + result writer OK")
+
+
+def test_sla_check_matrix():
+    from app.sla import SlaTuner
+    t = SlaTuner("j", {"host_ip": "h", "host_port": 1}, {"ttft_p90": 3000, "throughput_min": 100}, 2, 4, None)
+    base = {"state": "completed", "ttft_p90_ms": 2500.0, "output_token_throughput": 150.0}
+    ok, why = t._sla_check(base)
+    assert ok, why
+    ok, why = t._sla_check({**base, "ttft_p90_ms": 3000.0})  # exactly at limit → pass
+    assert ok
+    ok, why = t._sla_check({**base, "ttft_p90_ms": 3000.1})
+    assert not ok and "TTFT" in why
+    ok, why = t._sla_check({**base, "output_token_throughput": 99.9})
+    assert not ok and "吞吐" in why
+    ok, why = t._sla_check({**base, "ttft_p90_ms": -1})
+    assert not ok and "无数据" in why
+    ok, why = t._sla_check({**base, "state": "failed"})
+    assert not ok and "failed" in why
+    print("sla check matrix OK")
+
+
+def test_dataset_gen_real(tmp):
+    """Offline dataset generation against the packaged Qwen3-0.6B tokenizer."""
+    from app.dataset_gen import parse_prefix_ratio
+    assert parse_prefix_ratio("90%") == 0.9 and parse_prefix_ratio(0.5) == 0.5
+    assert parse_prefix_ratio("0.9") == 0.9
+    try:
+        parse_prefix_ratio("abc")
+        raise AssertionError("invalid ratio must raise")
+    except ValueError:
+        pass
+    tok = ROOT / "assets" / "model" / "Qwen3-0.6B"
+    if not (tok / "tokenizer.json").exists():
+        print("dataset gen SKIP (no local tokenizer)")
+        return
+    from app.dataset_gen import generate_dataset
+    out = Path(tmp) / "ds"
+    r = generate_dataset(tokenizer_path=str(tok), input_len=32, number=6,
+                         save_path=str(out), dp=1, repeat_rate=0.9, seed=42,
+                         prefix_num=2, mode="text")
+    ds = Path(r["dataset_path"])
+    assert ds.is_file() and ds.stat().st_size > 0
+    lines = ds.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 6, f"expected 6 rows, got {len(lines)}"
+    import json as _json
+    for ln in lines:
+        row = _json.loads(ln)
+        assert row, "empty row"
+    assert Path(r["prefix_path"]).is_file()
+    print("dataset gen (real tokenizer, offline) OK")
+
+
+def test_tokenizer_mgr(tmp):
+    from app import tokenizer_mgr
+    tok = ROOT / "assets" / "model" / "Qwen3-0.6B"
+    if not (tok / "tokenizer.json").exists():
+        print("tokenizer mgr SKIP (no local tokenizer)")
+        return
+    reg = tokenizer_mgr.register("test-pack", str(tok))
+    assert reg["source"] == "custom"
+    assert tokenizer_mgr.resolve("test-pack") == str(tok)
+    try:
+        tokenizer_mgr.register("bad", str(tmp))  # dir without tokenizer files
+        raise AssertionError("must reject dir without tokenizer files")
+    except ValueError:
+        pass
+    v = tokenizer_mgr.verify("test-pack")
+    assert v["ok"] and v["vocab_size"] > 100000, v
+    tokenizer_mgr.delete("test-pack")
+    try:
+        tokenizer_mgr.resolve("test-pack")
+        raise AssertionError("deleted tokenizer must not resolve")
+    except ValueError:
+        pass
+    print("tokenizer mgr OK")
+
+
 if __name__ == "__main__":
     tmp = tempfile.mkdtemp(prefix="pt_features_")
     config.init_home(str(tmp))
@@ -204,9 +377,15 @@ if __name__ == "__main__":
     test_sla_spec()
     test_validate_config()
     test_pod_and_events()
+    test_metrics_hit_rate()
+    test_parse_pod_and_metrics_text()
     test_runner_normalize()
     test_aisbench_env(tmp)
     test_store_kinds_delete_sla_jobs()
+    test_sla_check_matrix()
+    test_parse_aisbench_log(tmp)
+    test_dataset_gen_real(tmp)
+    test_tokenizer_mgr(tmp)
     # compare + reports need runs in the same home
     test_compare_engine(tmp)
     test_reports(tmp)
