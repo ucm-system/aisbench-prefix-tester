@@ -169,6 +169,9 @@ def test_sla_start_validation():
     bad2 = c.post("/api/sla/start", headers=H,
                   json={"config": cfg, "sla": {"ttft_p90": 5}})
     assert bad2.status_code == 400 and "seed" in bad2.json()["detail"], bad2.text
+    bad3 = c.post("/api/sla/start", headers=H,
+                  json={"config": {**cfg, "seed": 1}, "sla": {"ttft_p90": 0}})
+    assert bad3.status_code == 400 and "无意义" in bad3.json()["detail"], bad3.text
     print("sla start validation OK")
 
 

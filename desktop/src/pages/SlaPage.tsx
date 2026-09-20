@@ -33,6 +33,9 @@ export default function SlaPage() {
   const [bounds, setBounds] = useState({ start: 8, max: 128 });
   const [job, setJob] = useState<Job | null>(null);
   const [history, setHistory] = useState<Job[]>([]);
+  const [logRunId, setLogRunId] = useState("");
+  const [logLines, setLogLines] = useState<string[]>([]);
+  const logBoxRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<number | null>(null);
 
   const loadHistory = () => {
@@ -94,9 +97,21 @@ export default function SlaPage() {
         repeat_rate: `${form.repeat_rate}%`, test_name: "sla-search",
         pod_info: form.pods.split("\n").map((s) => s.trim()).filter(Boolean),
       };
+      // pre-flight contradiction checks — refuse to run an unsatisfiable spec
+      const seen = new Map<string, number>();
+      for (const row of slaRows) {
+        if (!(row.value > 0)) {
+          toast(`SLA 条件「${row.metric}/${row.stat}」数值必须 > 0`); return;
+        }
+        const k = `${row.metric}_${row.stat}`;
+        if (seen.has(k) && seen.get(k) !== row.value) {
+          toast(`SLA 条件矛盾：「${k}」同时设置了 ${seen.get(k)} 与 ${row.value} 两个不同阈值`); return;
+        }
+        seen.set(k, row.value);
+      }
       const slaSpec: Record<string, number> = {};
       for (const row of slaRows) {
-        if (row.value > 0) slaSpec[`${row.metric}_${row.stat}`] = row.value;
+        slaSpec[`${row.metric}_${row.stat}`] = row.value;
       }
       const r = await api.post<{ job_id: string }>("/api/sla/start", {
         config: cfg, sla: slaSpec,
@@ -124,6 +139,29 @@ export default function SlaPage() {
   };
 
   const fmtT = (t?: number) => t ? new Date(t * 1000).toLocaleString("zh-CN", { hour12: false }) : "—";
+
+  // probe log follower: tail the selected (or latest) probe's ais_bench output
+  useEffect(() => {
+    if (!job) return;
+    const active = ACTIVE_STATES.includes(job.state);
+    const latest = job.probes.length ? (job.probes[job.probes.length - 1].run_id ?? "") : "";
+    const rid = logRunId || latest;
+    if (!rid) return;
+    let stop = false;
+    const fetchLogs = async () => {
+      try {
+        const r = await api.get<{ lines: string[] }>(`/api/runs/${rid}/logs?tail=120`);
+        if (!stop) setLogLines(r.lines ?? []);
+      } catch { /* probe run deleted or sidecar offline */ }
+    };
+    fetchLogs();
+    const t = active ? window.setInterval(fetchLogs, 2000) : null;
+    return () => { stop = true; if (t) window.clearInterval(t); };
+  }, [job?.job_id, job?.state, job?.probes.length, logRunId]);
+
+  useEffect(() => {
+    if (logBoxRef.current) logBoxRef.current.scrollTop = logBoxRef.current.scrollHeight;
+  }, [logLines]);
 
   const groups = job?.probes.map((p) => `c${p.concurrency}`) ?? [];
   const ttftSeries = [{ data: job?.probes.map((p) => p.ttft_p90_ms ?? 0) ?? [], color: HBM }];
@@ -218,7 +256,8 @@ export default function SlaPage() {
                 : job.state === "interrupted" ? "—" : "搜索中…"}</div>
               <div className="s">{[job.note, STATE_TEXT[job.state] ?? job.state]
                 .filter((s, i, arr) => s && arr.indexOf(s) === i).join(" · ")}
-                {job.current ? ` · 当前并发 ${job.current}` : ""}</div>
+                {job.current ? ` · 当前并发 ${job.current}` : ""}
+                {job.probes.length ? ` · 已完成探针 ${job.probes.length}` : ""}</div>
             </div>
             <table className="mini-table">
               <thead><tr><th>并发</th><th>TTFT P90</th><th>TPOT avg</th><th>吞吐</th><th>SLA</th></tr></thead>
@@ -254,6 +293,26 @@ export default function SlaPage() {
           </>
         )}
       </div>
+
+      {job && (
+        <div className="card">
+          <h3>探针日志
+            <select className="sel" style={{ maxWidth: 240, marginLeft: "auto" }}
+              value={logRunId} onChange={(e) => setLogRunId(e.target.value)}>
+              <option value="">跟随最新探针</option>
+              {job.probes.map((p, i) => (
+                <option key={i} value={p.run_id ?? ""}>c{p.concurrency} · {p.run_id}</option>
+              ))}
+            </select>
+          </h3>
+          <div className="logview" ref={logBoxRef} style={{ height: 200 }}>
+            {logLines.map((l, i) => (
+              <div key={i} className={"ln" + (l.includes("ERROR") ? " err" : l.includes("WARN") ? " warn" : "")}>{l}</div>
+            ))}
+            {!logLines.length && <div className="ln muted">暂无日志 — 探针启动后此处跟随 ais_bench 输出</div>}
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <h3>历史调优 <span className="sec-tag">独立于「运行记录」· 点击行加载详情</span></h3>

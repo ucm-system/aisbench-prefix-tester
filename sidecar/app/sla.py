@@ -45,14 +45,20 @@ def parse_sla_spec(sla: dict) -> dict:
     for key, value in sla.items():
         if value is None:
             continue
+        try:
+            fv = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"SLA 值必须是数字: {key}={value!r}")
+        if fv <= 0:
+            raise ValueError(f"SLA 值必须 > 0: {key}={value!r}（0 或负数的阈值无意义）")
         if key == "throughput_min":
-            out[key] = float(value)
+            out[key] = fv
             continue
         norm = key.removesuffix("_ms")
         metric, _, stat = norm.partition("_")
         if metric not in SLA_METRICS or stat not in SLA_STATS:
             raise ValueError(f"unknown SLA key: {key}")
-        out[norm] = float(value)
+        out[norm] = fv
     return out
 
 
@@ -122,6 +128,7 @@ class SlaTuner(threading.Thread):
 
     # ---------------------------------------------------------------- probes
     def _probe(self, concurrency: int) -> dict:
+        t0 = time.time()
         cfg = dict(self.base_cfg)
         cfg["concurrency"] = concurrency
         cfg["test_name"] = f"sla-c{concurrency}"
@@ -137,23 +144,26 @@ class SlaTuner(threading.Thread):
             if self.cancelled.is_set():
                 runner.stop_run(run_id)
                 return {"concurrency": concurrency, "ok": False, "run_id": run_id,
-                        "state": "cancelled"}
+                        "state": "cancelled", "elapsed_s": round(time.time() - t0, 1)}
             d = store.get_run(run_id)
             if d is None:
                 # run deleted under us → treat as interrupted
                 return {"concurrency": concurrency, "ok": False, "run_id": run_id,
-                        "state": "cancelled", "reason": "run deleted"}
+                        "state": "cancelled", "reason": "run deleted",
+                        "elapsed_s": round(time.time() - t0, 1)}
             if d["status"] in ("completed", "failed", "cancelled"):
                 break
             time.sleep(2)
         fulls = [r for r in store.get_rounds(run_id) if r["phase"] == "full"]
         if not fulls:
             return {"concurrency": concurrency, "ok": False, "run_id": run_id,
-                    "state": d["status"], "reason": "no full-phase result"}
+                    "state": d["status"], "reason": "no full-phase result",
+                    "elapsed_s": round(time.time() - t0, 1)}
         m = fulls[0]["metrics"]
         h = (fulls[0]["hit_rate"] or {}).get("aggregated", {})
         probe = {
             "concurrency": concurrency, "run_id": run_id, "state": d["status"],
+            "elapsed_s": round(time.time() - t0, 1),
             "ttft_avg_ms": m.get("ttft_avg_ms", -1),
             "ttft_p90_ms": m.get("ttft_p90_ms", -1),
             "tpot_avg_ms": m.get("tpot_avg_ms", -1),
@@ -185,6 +195,26 @@ class SlaTuner(threading.Thread):
         return (False, "; ".join(bad)) if bad else (True, "SLA 满足")
 
     # ---------------------------------------------------------------- search
+    def _preflight(self) -> Optional[dict]:
+        """One probe at concurrency=1: the latency-easiest point. If the SLA
+        already fails here, no feasible concurrency exists — fail fast with
+        measured evidence instead of burning the whole ladder+bisect search."""
+        if not any(k != "throughput_min" for k in self.sla):
+            return None  # throughput-only SLA: c=1 is the hardest point, no conclusion
+        if self.start_c <= 1:
+            return None  # the ladder's first probe IS the preflight
+        pre = self._probe(1)
+        pre["preflight"] = True
+        self.probes.append(pre)
+        self._publish()
+        if not pre["ok"]:
+            self.max_ok = 0
+            self.note = ("预检失败：并发=1 即无法满足 SLA（" + (pre.get("reason") or "") +
+                         "）；阈值与真实服务能力矛盾，请放宽后重试")
+            self._set("done")
+            return pre
+        return pre
+
     def run(self):
         try:
             self._set("running")
@@ -193,6 +223,10 @@ class SlaTuner(threading.Thread):
             self.dataset_files = self._prepare_dataset(rc)
             self.note = f"数据集已生成（所有探针复用，命中率口径一致）"
             self._publish()
+
+            pre = self._preflight()
+            if pre is not None and not pre["ok"]:
+                return
 
             # phase 1: exponential ladder
             cur = self.start_c

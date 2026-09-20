@@ -157,6 +157,13 @@
 结论：① UCM 写入无感知开销（两服务冷启动同价）；② 容器重启后 UCM 从磁盘复活 92% 前缀 KV，TTFT **-88%**、吞吐 **6×**；③ 多轮同数据下回载进 HBM 后稳定 92% 命中、TTFT 360-450ms 平稳。工具侧 `ucm:* 指标`、ext 命中差分、多轮时序全部正常工作。
 顺带修复：`/api/datasets/generate` 传字符串 repeat_rate 崩溃（generate_dataset 内补 parse_prefix_ratio 归一）。
 
+### 第六轮（SLA 强化 + 真实服务最优值探测）
+
+- **矛盾/非法阈值拒绝**：`parse_sla_spec` 拒绝 ≤0 值与非数字（400 + 中文说明）；UI 在启动前拦截「同一指标同一分位设置两个不同阈值」的矛盾组合（dict 会静默去重，必须在 rows 层检查）。
+- **预检快失败**：`SlaTuner._preflight` 在阶梯前先打一个 c=1 探针（延迟类 SLA 的最易点）——并发=1 都不满足时直接 `done + max_ok=0 + 预检失败说明（附实测值）`，不再烧完整个阶梯+二分；预检探针带 `preflight: true` 标记。
+- **过程可观测**：探针记录 `elapsed_s`；快照带探针数；SlaPage 新增「探针日志」卡片——跟随最新（或下拉选择）探针的 ais_bench 输出（`/logs?tail=120` 每 2s），活动期自动滚动；结果卡显示「已完成探针 N」。
+- **真实服务探测**（Qwen3.5-0.8B+UCM@8201，SLA：ttft_p90≤2000ms 且 tpot_avg≤30ms，c: 4→64）：预检 c=1 通过（239ms），阶梯 4/8/16/32/64 全部满足（ttft_p90 峰值 553ms、tpot ≤15.1ms）→ **max_ok=64（触探测上限）**；吞吐在 c=32 达峰 594 tok/s、c=64 回落 455 → 若以吞吐为目标 32 是最优工作点；要找真正的并发上限需提高 max_concurrency（服务 max-num-seqs=32，c>32 为排队）。测试中一次 WinError 10054 瞬断由驱动重试吸收。
+
 **遗留 backlog**（按优先级，均已有修复方案在审查报告中）：① `/api/boot`+CORS 完整加固（已做容器门控，CORS `*` 与 `?token=` 留痕待 ticket 化）；② 源码模式共享 workspace 并发串写（模块互斥锁或全模式 config-dir 统一，需真跑 ais_bench 验证）；③ export/compare/logs 大文件同步读改 to_thread/流式；④ metrics 字段语义（`total_input_tokens` 实为均值、-1 哨兵改 null、max_concurrency 类型）；⑤ warmup 退出码忽略导致脏指标入库；⑥ store 异常回滚统一化；⑦ datasets/outputs 保留策略；⑧ compare missing_rounds 用 len 而非最大轮号的口径；⑨ 键盘可达性/aria。
 
 ### 第二轮（导航重构，同日）

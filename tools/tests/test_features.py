@@ -390,6 +390,61 @@ def test_resolve_command():
     print("resolve command OK")
 
 
+def _sla_fake_runner(ttft_p90_ms: float):
+    """Patch runner.start_run so probes complete instantly with fixed ttft_p90."""
+    from app import runner as _runner
+    orig = _runner.start_run
+
+    def fake_start(run_id, loop=None):
+        c = store.get_run(run_id)["config"]["concurrency"]
+        store.update_run(run_id, status="completed")
+        store.upsert_round(run_id, 1, "full", False, {},
+                           {"ttft_p90_ms": ttft_p90_ms}, {})
+    _runner.start_run = fake_start
+    return orig
+
+
+def test_sla_preflight_fastfail():
+    """Threshold impossible even at concurrency=1 → refuse without the search."""
+    from app.sla import SlaTuner
+    orig = _sla_fake_runner(9000.0)
+    try:
+        t = SlaTuner("pf1", {"host_ip": "h", "host_port": 1, "seed": 1,
+                             "input_len": 64, "data_num": 2, "prefix_num": 1,
+                             "repeat_rate": "90%", "dp": 1},
+                     {"ttft_p90": 5000}, 4, 32, None)
+        t._prepare_dataset = lambda rc: {"prefix_path": "", "dataset_path": "x"}
+        t.run()
+    finally:
+        from app import runner as _runner
+        _runner.start_run = orig
+    assert t.max_ok == 0
+    assert t.state == "done" and len(t.probes) == 1 and t.probes[0].get("preflight")
+    assert "预检失败" in t.note, t.note
+    print("sla preflight fast-fail OK")
+
+
+def test_sla_search_fake_runner():
+    """All probes pass → ladder covers [start..max] and max_ok == max."""
+    from app.sla import SlaTuner
+    orig = _sla_fake_runner(100.0)
+    try:
+        t = SlaTuner("fs1", {"host_ip": "h", "host_port": 1, "seed": 1,
+                             "input_len": 64, "data_num": 2, "prefix_num": 1,
+                             "repeat_rate": "90%", "dp": 1},
+                     {"ttft_p90": 100000}, 2, 4, None)
+        t._prepare_dataset = lambda rc: {"prefix_path": "", "dataset_path": "x"}
+        t.run()
+    finally:
+        from app import runner as _runner
+        _runner.start_run = orig
+    assert t.state == "done" and t.max_ok == 4
+    # preflight runs first when start_c > 1, then the ladder
+    assert [p["concurrency"] for p in t.probes] == [1, 2, 4], t.probes
+    assert t.probes[0].get("preflight") and all(p["ok"] for p in t.probes)
+    print("sla search fake-runner OK")
+
+
 if __name__ == "__main__":
     tmp = tempfile.mkdtemp(prefix="pt_features_")
     config.init_home(str(tmp))
@@ -407,6 +462,8 @@ if __name__ == "__main__":
     test_dataset_gen_real(tmp)
     test_tokenizer_mgr(tmp)
     test_resolve_command()
+    test_sla_preflight_fastfail()
+    test_sla_search_fake_runner()
     # compare + reports need runs in the same home
     test_compare_engine(tmp)
     test_reports(tmp)
