@@ -41,7 +41,7 @@ DEFAULTS = {
     "test_type": "stream", "enable_think": False,
     "prefix_num": 1, "repeat_rate": 0.5, "dp": 1, "seed": 1,
     "length_mean": None, "length_std": None, "length_min": None, "length_max": None,
-    "summarizer": "default_perf",
+    "summarizer": "default_perf", "api_key": "",
     "pod_info": [], "tokenizer": "", "vocab_file": None, "dataset_mode": "text",
     "dataset_id": None,
     "cache_reset": "each_round",        # each_round | first_round_only | never
@@ -187,7 +187,9 @@ def _execute(handle: RunHandle) -> None:
     # the package itself for name-based resolution, so no per-run subdir.
     # Otherwise (mock/dev), isolate per run to avoid clobbering.
     wp_setting = store.get_setting("work_path", "")
-    work_path = wp_setting if wp_setting else str(config.work_path() / run_id)
+    child_mode = _is_child_mode(store.get_setting("aisbench_command", ""))
+    work_path = (wp_setting if wp_setting else str(config.work_path() / run_id))
+    run_work = str(Path(work_path) / run_id) if wp_setting else work_path
     try:
         _sync_await(collector.start())
         _status(handle, "running")
@@ -216,19 +218,36 @@ def _execute(handle: RunHandle) -> None:
             dataset = _ensure_dataset(handle, rc, cfg, str(run_dir))
             prefix_file, data_file = dataset["prefix_path"], dataset["dataset_path"]
 
-            aisbench_args = aisbench_env.build_aisbench_command(
-                cfg["summarizer"], str(run_dir / "results"))
+            child_mode = _is_child_mode(settings_cmd)
+            pt_configs = run_dir / "pt_configs"
+            (pt_configs / "models").mkdir(parents=True, exist_ok=True)
 
             # ---- phase 1: warmup (concurrency=dp, output_len=1) ----
             events.publish(run_id, "log", stream="stdout",
                            line=f"[Round {round_index}/{handle.total_rounds}] Phase 1 warmup: "
                                 f"concurrency={rc['dp']}, output_len=1")
-            aisbench_env.write_model_config(
-                work_path,
+            model_cfg_path = aisbench_env.write_model_config(
+                str(pt_configs),
                 rc["model_path"], rc["model_name"], rc["host_ip"], rc["host_port"],
-                rc["url"], rc["dp"], 1, rc["request_rate"], rc["test_type"], rc["enable_think"])
+                rc["url"], rc["dp"], 1, rc["request_rate"], rc["test_type"],
+                rc["enable_think"], rc.get("api_key", ""))
+            import shutil as _shutil
+            (pt_configs / "models").mkdir(parents=True, exist_ok=True)
+            _shutil.copyfile(model_cfg_path, pt_configs / "models" / "vllm_api_chat_temp.py")
+            ds_link = None
             if prefix_file:
-                aisbench_env.link_dataset(work_path, prefix_file)
+                ds_link = aisbench_env.link_dataset(pt_configs, prefix_file)
+            if child_mode:
+                ds_cfg_out = pt_configs / "datasets" / "gsm8k_gen_0_shot_cot_str_perf.py"
+                ds_cfg_out.parent.mkdir(parents=True, exist_ok=True)
+                aisbench_env.write_dataset_config(ds_link or data_file, str(ds_cfg_out))
+                aisbench_env.copy_summarizer(cfg["summarizer"], str(pt_configs))
+                base_args = aisbench_env.build_aisbench_command(
+                    cfg["summarizer"], str(run_dir / "results"))
+                aisbench_args = (["--config-dir", str(pt_configs),
+                                  "--models", "vllm_api_chat_temp",
+                                  "--datasets", "gsm8k_gen_0_shot_cot_str_perf"]
+                                 + base_args[4:])
             before = collector_snapshot()
             ret = _run_phase(handle, settings_cmd, aisbench_args, stdout_log, stderr_log, work_path)
             after = collector_snapshot()
@@ -253,12 +272,19 @@ def _execute(handle: RunHandle) -> None:
             events.publish(run_id, "log", stream="stdout",
                            line=f"[Round {round_index}/{handle.total_rounds}] Phase 2 full: "
                                 f"concurrency={rc['concurrency']}, output_len={rc['output_len']}")
-            aisbench_env.write_model_config(
-                work_path,
+            model_cfg_path = aisbench_env.write_model_config(
+                str(pt_configs),
                 rc["model_path"], rc["model_name"], rc["host_ip"], rc["host_port"],
                 rc["url"], rc["concurrency"], rc["output_len"], rc["request_rate"],
-                rc["test_type"], rc["enable_think"])
-            aisbench_env.link_dataset(work_path, data_file)
+                rc["test_type"], rc["enable_think"], rc.get("api_key", ""))
+            import shutil as _shutil
+            (pt_configs / "models").mkdir(parents=True, exist_ok=True)
+            _shutil.copyfile(model_cfg_path, pt_configs / "models" / "vllm_api_chat_temp.py")
+            ds_link = aisbench_env.link_dataset(pt_configs, data_file)
+            if child_mode:
+                ds_cfg_out = pt_configs / "datasets" / "gsm8k_gen_0_shot_cot_str_perf.py"
+                ds_cfg_out.parent.mkdir(parents=True, exist_ok=True)
+                aisbench_env.write_dataset_config(ds_link or data_file, str(ds_cfg_out))
             before = collector_snapshot()
             ret = _run_phase(handle, settings_cmd, aisbench_args, stdout_log, stderr_log, work_path)
             if ret != 0 and not handle.cancelled.is_set():
@@ -295,6 +321,10 @@ def _execute(handle: RunHandle) -> None:
         ts_file.close()
         with _lock:
             _active.pop(run_id, None)
+
+
+def _is_child_mode(settings_cmd: str) -> bool:
+    return "--child-aisbench" in (settings_cmd or "")
 
 
 def _merge_round(cfg: dict, overrides: dict) -> dict:

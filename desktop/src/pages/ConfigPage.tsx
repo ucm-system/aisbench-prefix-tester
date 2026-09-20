@@ -15,7 +15,8 @@ const DEFAULT_CFG = {
   length_min: null as number | null, length_max: null as number | null,
   tokenizer: "", vocab_file: null as string | null, dataset_mode: "text",
   cache_reset: "each_round", per_round_seed_offset: false,
-  collection_interval: 5, summarizer: "default_perf",
+  api_key: "", summarizer: "default_perf",
+  collection_interval: 5,
 };
 
 export default function ConfigPage() {
@@ -142,6 +143,16 @@ export default function ConfigPage() {
               <input className="inp" value={cfg.model_name} onChange={(e) => set({ model_name: e.target.value })} data-t="model_name" /></div>
             <div className="field" style={{ maxWidth: 110 }}><label>NPU 数</label>
               <input className="inp mono" value={cfg.npu_num} onChange={(e) => set({ npu_num: +e.target.value || 1 })} /></div>
+          </div>
+          <div className="row" style={{ marginBottom: 10 }}>
+            <div className="field"><label>API Key（服务启用鉴权时必填）</label>
+              <input className="inp mono" type="password" data-t="api_key" value={cfg.api_key}
+                onChange={(e) => set({ api_key: e.target.value })} placeholder="sk-…" /></div>
+            <div className="field" style={{ maxWidth: 170 }}><label>Summarizer</label>
+              <select className="sel" value={cfg.summarizer} onChange={(e) => set({ summarizer: e.target.value })}>
+                <option value="default_perf">default_perf</option>
+                <option value="stable_stage">stable_stage</option>
+              </select></div>
           </div>
           <div className="row">
             <div className="field" style={{ flex: 2.2 }}><label>模型目录（tokenizer 来源）<span className="req">*</span></label>

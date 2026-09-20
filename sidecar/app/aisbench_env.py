@@ -54,7 +54,7 @@ def write_model_config(
     model_path: str, model_name: str,
     host_ip: str, host_port: int, url: str,
     concurrency: int, output_len: int, request_rate: int,
-    test_type: str, enable_think: bool,
+    test_type: str, enable_think: bool, api_key: str = "",
 ) -> str:
     """Render templates/default_api.py into the AISBench config dir; returns written path."""
     if test_type == "text":
@@ -77,6 +77,7 @@ def write_model_config(
         "url_for_replace": url,
         "outputlen_for_replace": str(output_len),
         "concurrency_for_replace": str(concurrency),
+        "api_key_for_replace": api_key,
         "generation_kwargs_for_replace": generation_kwargs,
     }
 
@@ -113,3 +114,35 @@ def build_aisbench_command(summarizer: str, output_dir: str) -> list[str]:
         "--debug",
         "--num-warmups", "0",
     ]
+
+DATASET_TPL = Path(__file__).parent / "templates" / "gsm8k_perf_dataset.py"
+
+
+def write_dataset_config(test_jsonl_path: str, out_path: str) -> str:
+    """Render the gsm8k perf dataset config pointing at an absolute test.jsonl."""
+    src = DATASET_TPL.read_text(encoding="utf-8")
+    src = src.replace("ds_path_for_replace", str(test_jsonl_path).replace("\\", "/"))
+    Path(out_path).write_text(src, encoding="utf-8")
+    logger.info("dataset config written: %s", out_path)
+    return out_path
+
+def copy_summarizer(summarizer: str, config_dir: str) -> str:
+    """Copy the summarizer config (default_perf.py etc.) into {config_dir}/summarizers/
+    so --config-dir mode can resolve it."""
+    import importlib.util
+    spec = importlib.util.find_spec("ais_bench")
+    src = None
+    if spec and spec.origin:
+        root = Path(os.path.dirname(os.path.dirname(spec.origin)))
+        base = root / "ais_bench" / "benchmark" / "configs" / "summarizers"
+        for cand in (base / f"{summarizer}.py", base / "perf" / f"{summarizer}.py"):
+            if Path(cand).exists():
+                src = cand
+                break
+    dst = Path(config_dir) / "summarizers" / f"{summarizer}.py"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if src and Path(src).exists():
+        shutil.copyfile(src, dst)
+    else:
+        dst.write_text("# placeholder summarizer\n", encoding="utf-8")
+    return str(dst)

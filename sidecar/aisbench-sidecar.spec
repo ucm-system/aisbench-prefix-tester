@@ -16,10 +16,10 @@ a = Analysis(
         'uvicorn.lifespan', 'uvicorn.lifespan.on',
         'anyio._backends._asyncio',
         'multidict', 'frozenlist',
+        'ais_bench.benchmark.tasks.custom_tasks',
     ],
-    excludes=['torch', 'torchvision', 'torchaudio', 'scipy', 'pandas', 'matplotlib', 'tkinter',
-           'polars', 'cv2', 'pyarrow', 'babel', 'jieba', 'onnxruntime', 'sklearn',
-           'plotly', 'sphinx', 'IPython', 'jupyter', 'pygments', 'numba'],
+    excludes=['matplotlib', 'tkinter', 'polars', 'babel',
+           'onnxruntime', 'sphinx', 'IPython', 'jupyter', 'pygments', 'numba'],
     noarchive=False,
 )
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
