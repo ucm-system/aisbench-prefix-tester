@@ -26,3 +26,6 @@ tools/tests/tmp/
 assets/
 ui-*.png
 *.log
+
+# exe child-mode acceptance harness homes
+.exe-verify-home-*

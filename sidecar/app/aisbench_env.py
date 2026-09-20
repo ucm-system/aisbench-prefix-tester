@@ -119,11 +119,19 @@ DATASET_TPL = Path(__file__).parent / "templates" / "gsm8k_perf_dataset.py"
 
 
 def write_dataset_config(test_jsonl_path: str, out_path: str) -> str:
-    """Render the gsm8k perf dataset config pointing at an absolute test.jsonl."""
+    """Render the gsm8k perf dataset config for the linked dataset.
+
+    GSM8KDataset.load() treats `path` as a *directory* (joins
+    train.jsonl/test.jsonl onto it), so the config must point at the parent
+    dir of the linked test.jsonl — never at the file itself."""
+    ds_dir = Path(test_jsonl_path).parent
+    train = ds_dir / "train.jsonl"
+    if not train.exists():
+        train.write_text("", encoding="utf-8")
     src = DATASET_TPL.read_text(encoding="utf-8")
-    src = src.replace("ds_path_for_replace", str(test_jsonl_path).replace("\\", "/"))
+    src = src.replace("ds_path_for_replace", str(ds_dir).replace("\\", "/"))
     Path(out_path).write_text(src, encoding="utf-8")
-    logger.info("dataset config written: %s", out_path)
+    logger.info("dataset config written: %s (path=%s)", out_path, ds_dir)
     return out_path
 
 def copy_summarizer(summarizer: str, config_dir: str) -> str:

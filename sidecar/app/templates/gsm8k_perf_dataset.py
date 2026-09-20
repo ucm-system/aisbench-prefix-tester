@@ -21,7 +21,7 @@ gsm8k_datasets = [
     dict(
         abbr='gsm8k',
         type=GSM8KDataset,
-        path="ds_path_for_replace",  # absolute path to test.jsonl
+        path="ds_path_for_replace",  # absolute dir containing train.jsonl/test.jsonl
         reader_cfg=gsm8k_reader_cfg,
         infer_cfg=gsm8k_infer_cfg,
         eval_cfg=gsm8k_eval_cfg)

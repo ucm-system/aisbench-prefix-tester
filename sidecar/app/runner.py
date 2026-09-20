@@ -194,6 +194,7 @@ def _execute(handle: RunHandle) -> None:
         _sync_await(collector.start())
         _status(handle, "running")
         settings_cmd = store.get_setting("aisbench_command", "ais_bench")
+        run_failed = False
 
         for round_index, overrides in enumerate(cfg["rounds"], start=1):
             if handle.cancelled.is_set():
@@ -291,6 +292,7 @@ def _execute(handle: RunHandle) -> None:
                 _status(handle, "failed", exit_code=ret)
                 events.publish(run_id, "log", stream="stderr",
                                line=f"AISBench exited with code {ret}")
+                run_failed = True
                 break
             after = collector_snapshot()
             rate = metrics.compute_hit_rate(before, after)
@@ -306,7 +308,8 @@ def _execute(handle: RunHandle) -> None:
 
         if handle.cancelled.is_set():
             _status(handle, "cancelled")
-        else:
+        elif not run_failed:
+            # never overwrite a failed/cancelled status set inside the loop
             _status(handle, "completed")
     except DatasetCancelled:
         _status(handle, "cancelled")
@@ -427,7 +430,13 @@ def _run_phase(handle: RunHandle, command: str, args: list[str],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         encoding="utf-8", errors="replace", bufsize=1)
     assert handle.proc.stdout is not None
+    pyi_error = False
     for line in handle.proc.stdout:
+        if not pyi_error and "PYI-" in line and "ERROR" in line:
+            # PyInstaller bootstrap crash inside a re-invoked child (e.g. task
+            # script re-entered the exe). Some wrappers still exit 0, so this
+            # must never be reported as a successful phase (mock false positive).
+            pyi_error = True
         stdout_log.write(line)
         aisbench_log.write(line)
         stdout_log.flush()
@@ -436,6 +445,12 @@ def _run_phase(handle: RunHandle, command: str, args: list[str],
     ret = handle.proc.wait()
     handle.proc = None
     aisbench_log.close()
+    if pyi_error:
+        stderr_log.write("[PYI-ERROR in child output; phase marked failed]\n")
+        stderr_log.flush()
+        events.publish(handle.run_id, "log", stream="stderr",
+                       line="PyInstaller bootstrap error in AISBench output; marking phase failed")
+        ret = ret or 1
     if ret != 0:
         stderr_log.write(f"[exit {ret}]\n")
         stderr_log.flush()

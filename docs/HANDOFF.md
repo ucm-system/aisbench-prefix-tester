@@ -18,7 +18,7 @@
 
 - 功能 v0.1.0 全部完成：api_key、轮次编辑器（表格+JSON，10 个键可按轮覆盖）、SLA 弹性统计（ttft/tpot/e2el × avg/p50..p99/max）、亮暗主题、轻量化打包（783MB→305MB，带 torch 约 1.2GB）、README+截图已推 GitHub。
 - 单实例端到端验证：✅ 完成（源码模式，真实服务器，见 §3）。
-- **exe 子模式端到端：❌ 存在阻断性 bug（§5，接手第一优先级）**。
+- **exe 子模式端到端：✅ 已修复并用真实服务器验收通过（2026-09-20 晚，根因链与验收见 §5）**。
 - PD 分离（3P1D）：服务端启动失败根因已查明、正确姿势已调研清楚（§6）；工具侧 pod 维度代码已就绪未实测。
 - 服务器：PD 容器已删、8 卡已释放；dxlong-pt-base 容器内 Qwen3-0.6B 单实例服务**正在运行**（203.0.113.10:8101，davinci4），可直接复用或用脚本停掉。
 
@@ -31,21 +31,42 @@
 ## 4. 如何运行
 
 - 开发：`cd desktop && npm run dev`（vite 自启 sidecar，写 `.sidecar-dev.json`；UI http://localhost:5173 或 5174）。Python 必须 `py -3.11`（系统 `python` 是无 pip 的 venv）。npm 需 `ELECTRON_MIRROR`（已配 npmmirror）。
-- 设置项（全局共享 `settings.json`）：`aisbench_command`（见 §5 的关键区别）、`work_path`（pip 安装的 ais_bench 的 site-packages 根，本机 `C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages`）。
+- 设置项（存于 SQLite `app.db` 的 settings 表，**不是 settings.json**）：`aisbench_command`（见 §5 的关键区别）、`work_path`（pip 安装的 ais_bench 的 site-packages 根，本机 `C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages`）。
 - 打包：PyInstaller spec = `sidecar/aisbench-sidecar.spec`；electron-builder 输出 `D:\pt-release`（避免 EPERM）。
 - 单测：`py -3.11 tools/tests/test_features.py`（当前全绿）。
 
-## 5. 未解决问题 TOP1：冻结 exe 子模式真实压测必挂（阻断）
+## 5. 已解决：冻结 exe 子模式真实压测必挂（2026-09-20 晚修复并验收）
 
-- 现象：`aisbench_command = <dist>\aisbench-sidecar.exe --child-aisbench` 时，真实 run 失败，stdout.log 出现：
-  `PYI-xxxxx ERROR ... app\main.py:720 TypeError: expected str, bytes or os.PathLike object, not NoneType`，随后 `SUMM-FILE-001 can't find detail perf data file`，`AISBench exited with code 1`。
-- 根因（已定位到行）：ais_bench debug 跑法为每 task `subprocess.Popen(cmd, shell=True)`，`cmd` 由 `tasks/openicl_api_infer.py get_command()` 构造：`command = f"{sys.executable} {__file__} {params.py}"`（openicl_api_infer.py 约 128 行；模板见 runners/local.py `get_command_template`）。冻结 exe 内 `sys.executable` 就是 exe 本身 → 该 task 进程重新进入 `run_sidecar.py` 入口，argv 无 `--child-aisbench` → 误入 `_run_server()` → 无 `--home` 参数 → `Path(None)` 崩溃 → task 没跑 → summarizer 无明细 → exit 1。
-- 注意：mock 冒烟（run 20260920_204723_0a04「打包exe child冒烟v28」）是**假阳性**——同样有 4 条 PYI 崩溃但状态被标 completed。验收 exe 模式必须断言 AISBench 明细/perf 数据真实产生。
-- 源码模式没问题：`aisbench_command` 指向真实 python ais_bench（16:03 的三个真实 run 即此模式，0 崩溃）。
-- 修复方向（任选，均未实现）：
-  1. run_sidecar.py 入口加「脚本模式」：`argv[0]` 以 .py 结尾且存在 → `sys.argv=argv[1:]; runpy.run_path(argv[0], run_name="__main__")`（freeze_support() 之后）。**前提**：ais_bench task 脚本在产物里必须是真实文件——当前打包纯模块在嵌入归档里，需在 spec 中对 `ais_bench.benchmark.tasks` 等设 `module_collection_mode='py'`，并核实 `__file__` 解析出的路径真实存在。
-  2. 或在 `--child-aisbench` 入口内 monkeypatch `sys.executable`（指向带标记的自身命令行，注意 shell=True 引号），入口识别标记后走脚本模式。
-  3. 非调试模式（_run_normal）同样用 `sys.executable` 构造命令，换模式不能绕开，必须做 1 或 2。
+最终发现是 **四个叠加的 bug + 两个可靠性缺陷**，逐层暴露、逐层修复：
+
+1. **task 子进程重入**（原始根因）：ais_bench 以 `<sys.executable> <task>.py <cfg>.py` 拉起 task，冻结 exe 的 sys.executable 是自己 → 重入入口无 `--child-aisbench` → 误入 server → `Path(None)` 崩。
+   **修复**：`run_sidecar.py` 增加脚本模式分发——`argv[1]` 是存在的 `.py` 文件时（`freeze_support()` 之后）`runpy.run_path(argv[1], run_name="__main__")`。
+2. **纯模块打进了 PYZ**：`__file__` 是归档内虚拟路径，脚本模式前提不成立。
+   **修复**：spec 设 `module_collection_mode={'ais_bench': 'py'}`（PyInstaller 6.19 支持），ais_bench 全部以真实 .py 落盘 `_internal/ais_bench/`。
+3. **configs 整树缺失**：mmengine 动态加载的 `ais_bench/benchmark/configs`（summarizer/dataset/model 配置）从不被 import → 不进模块图 → 产物里 0 个文件 → CLI 加载 summarizer 直接 `KeyError: 'summarizer'`。
+   **修复**：spec 把该树整体作为 datas 打包（`copy_summarizer` 的 find_spec 定位与 CLI 名称解析都依赖它）。
+4. **child 模式数据集路径潜在 bug**：`GSM8KDataset.load` 把 `path` 当**目录**拼 `train.jsonl/test.jsonl`，而 `write_dataset_config` 塞的是 test.jsonl **文件**路径（旧包在此前一层就崩，从未暴露）。
+   **修复**：`aisbench_env.write_dataset_config` 改为指向链接文件的父目录。
+
+可靠性硬化（直接对应本文档最初警告的「mock 假阳性」）：
+
+- `runner._run_phase` 检测到子进程输出含 `PYI-…ERROR` 即强制该阶段失败（旧版即使崩了也可能 exit 0 混过去）。
+- 修复既有 bug：full 阶段失败 `_status(failed)` 后 `break`，会被循环收尾的 `_status(completed)` **覆盖**——这正是 run 20260920_204723_0a04（v28）4 条 PYI 崩溃却标 completed 的真正机制。
+
+**验收**（脚本 `tools/verify_exe_child.py`：自动起 exe sidecar → 设 `aisbench_command` → 跑一轮 → 断言 status/no-PYI/明细文件/命中率）：
+
+- mock（127.0.0.1:8091）：run 20260920_233152_d132 PASS，warmup+full 两阶段 `results/<ts>/performances/vllm-api-stream-chat/gsm8k_details.jsonl` 均真实产生。
+- 真实服务器 8101（input 4096 / output 32 / data 32 / prefix 4 / repeat 90% / conc 8）：run 20260920_233255_0e0b **PASS**，HBM 命中率 **0.8888**（≈理论 0.9，与源码模式参照一致），stdout.log 无 PYI。
+- 复跑命令：`py -3.11 tools/verify_exe_child.py --exe sidecar\dist\aisbench-sidecar\aisbench-sidecar.exe --target-host 203.0.113.10 --target-port 8101 --model qwen3 --min-hit 0.3`
+- 产物体积：含 torch + ais_bench 源码/配置落盘，约 955MB（onedir）。
+
+<details><summary>原始现象与分析（修复前留档）</summary>
+
+- 现象：`aisbench_command = <dist>\aisbench-sidecar.exe --child-aisbench` 时，真实 run 失败，stdout.log 出现 `PYI-xxxxx ERROR ... app\main.py:720 TypeError: expected str, bytes or os.PathLike object, not NoneType`，随后 `SUMM-FILE-001 can't find detail perf data file`，`AISBench exited with code 1`。
+- 根因定位：ais_bench debug/normal 均由 `tasks/openicl_api_infer.py get_command()` 构造 `command = f"{sys.executable} {__file__} {params.py}"`（runners/local.py `get_command_template`，shell=True）。冻结 exe 内 sys.executable 即 exe 本身 → task 进程重入 `run_sidecar.py` 入口，argv 无 `--child-aisbench` → 误入 `_run_server()` → 无 `--home` → `Path(None)` 崩 → task 没跑 → summarizer 无明细 → exit 1。
+- 源码模式（aisbench_command 指向真实 python ais_bench）不受影响。
+
+</details>
 
 ## 6. PD 分离（3P1D）调研结论（服务端未跑通，但根因与正确姿势已明确）
 
@@ -73,6 +94,6 @@
 
 ## 9. 接手人待办（建议顺序）
 
-1. 修 §5 exe 子模式 bug（script-mode + spec `module_collection_mode='py'`），重建 exe，**用真实服务器 8101 跑通并断言 perf 明细存在**（警惕 mock 假阳性）。
+1. ~~修 §5 exe 子模式 bug~~ ✅ 已完成（2026-09-20 晚，见 §5）。剩余跟进：用 electron-builder 重新打 portable 包（`D:\pt-release` 里仍是旧 sidecar），并验证首启动完整性自检。
 2. 按 §6 姿势 A 重写 3P1D 内层脚本（MooncakeConnectorV1 + dp1/tp1 + 代理），跑通后用工具实测 pod 维度（per_pod 命中率表、多端口采集时序）。
 3. 可选：UWM/横向扩展、报告模板美化、README 更新 PD 章节。
