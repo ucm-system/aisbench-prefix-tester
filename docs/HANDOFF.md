@@ -140,6 +140,23 @@
 - 用户旧库中的遗留 `aisbench_command="ais_bench"` 设置在打包模式下会被自动归一到自引用，无需迁移。
 - 打包产物：`assets/model` tokenizer + ais_bench 源码/配置 + 全部 Python 依赖随包（spec 已覆盖），干净机器开箱即用；`sidecar` 仅监听 127.0.0.1 + token，不对外暴露。
 
+### 第五轮（真实环境 UCM 多轮对比实验，Qwen3.5-0.8B @ 203.0.113.10）
+
+服务：夜间 v0.26.0rc 双容器（davinci2/6），`--dtype bfloat16`（**910B3 上 GDN 算子无 FP16 kernel**，用户模板的 float16 会挂）、`--enable-prefix-caching --no-disable-hybrid-kv-cache-manager`；UCM 侧 `UCMConnector + UcmPipelineStore(Cache|Posix, /tmp/ucm_cache, buffer 8GB)`。镜像不带 ucm 包——从旧 dxlong-pt-ucm 容器 `docker cp` 出 `ucm/ + ucm_patch.pth + wrapt` 挂载 + `pip install --no-deps` 内置 wheel（/root/.cache/ucm_wheels/uc_manager-0.6.0-cp312）解决；`/tmp/ucm_cache` 需预先 mkdir；`cache_buffer_capacity_gb ≥ 5` 否则 Cache 管线拒绝启动。实验脚本在 `/home/dxlong/ops/q35_*.sh` 与本地 `D:\Vibe_Workspace\ucm-server-ops\`，服务日志 `/home/dxlong/logs/q35_*.log`。
+
+实验（工具自包含 exe 驱动，数据集 16×1024tok/repeat90% 全程复用；`/reset_prefix_cache` 在该 nightly 仍 404，故以「容器重启」清空 HBM）：
+
+| 场景 | 阶段 | HBM 命中 | Ext 命中 | TTFT avg | 吞吐 |
+|---|---|---|---|---|---|
+| UCM 冷启动 | full R1 | 0% | 0% | 3883ms | 54 tok/s |
+| 基线冷启动 | full R1 | 0% | 0% | 3946ms | 55 tok/s |
+| **UCM 重启后**（HBM 清空） | full | 0% | **92.1%** | **468ms** | **328 tok/s** |
+| UCM 多轮 R1（回载后） | full | 92.1% | 0% | 379ms | 376 tok/s |
+| UCM 多轮 R2/R3 | full | 92.1% | 0% | 360-446ms | 327-382 tok/s |
+
+结论：① UCM 写入无感知开销（两服务冷启动同价）；② 容器重启后 UCM 从磁盘复活 92% 前缀 KV，TTFT **-88%**、吞吐 **6×**；③ 多轮同数据下回载进 HBM 后稳定 92% 命中、TTFT 360-450ms 平稳。工具侧 `ucm:* 指标`、ext 命中差分、多轮时序全部正常工作。
+顺带修复：`/api/datasets/generate` 传字符串 repeat_rate 崩溃（generate_dataset 内补 parse_prefix_ratio 归一）。
+
 **遗留 backlog**（按优先级，均已有修复方案在审查报告中）：① `/api/boot`+CORS 完整加固（已做容器门控，CORS `*` 与 `?token=` 留痕待 ticket 化）；② 源码模式共享 workspace 并发串写（模块互斥锁或全模式 config-dir 统一，需真跑 ais_bench 验证）；③ export/compare/logs 大文件同步读改 to_thread/流式；④ metrics 字段语义（`total_input_tokens` 实为均值、-1 哨兵改 null、max_concurrency 类型）；⑤ warmup 退出码忽略导致脏指标入库；⑥ store 异常回滚统一化；⑦ datasets/outputs 保留策略；⑧ compare missing_rounds 用 len 而非最大轮号的口径；⑨ 键盘可达性/aria。
 
 ### 第二轮（导航重构，同日）

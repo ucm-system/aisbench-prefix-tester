@@ -218,6 +218,8 @@ def generate_dataset(
     wrapper = TokenizerWrapper(tokenizer_path)
     tokenizer = wrapper._tok
     Path(save_path).mkdir(parents=True, exist_ok=True)
+    # accept "90%" / 0.9 / 90 — the datasets/generate route passes the raw form
+    repeat_rate = parse_prefix_ratio(repeat_rate)
 
     vocab_words = wrapper.load_custom_vocab(vocab_file) if vocab_file else None
     total_steps = prefix_num + number * 2 if repeat_rate < 1.0 else prefix_num
