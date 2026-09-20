@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { api, connStatus, initConnection, onSidecarExited, restartSidecar } from "./api";
 import ConfigPage from "./pages/ConfigPage";
 import MonitorPage from "./pages/MonitorPage";
@@ -71,9 +71,11 @@ export default function App() {
     return () => clearInterval(t);
   }, [ready]);
 
+  const toastTimer = useRef<number | null>(null);
   const toast = useCallback<Toast>((msg) => {
     setToastMsg(msg);
-    window.setTimeout(() => setToastMsg(""), 2600);
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToastMsg(""), 2600);
   }, []);
 
   const pageKey = route.split("/")[0];

@@ -6,6 +6,11 @@ import { useToast } from "../App";
 type Ev = { type: string; ts: number; [k: string]: any };
 
 const HBM = "#4f8bff", EXT = "#13c2c2", UCMC = "#9254de";
+const STATUS_TEXT: Record<string, string> = {
+  completed: "已完成", running: "运行中", failed: "失败", cancelled: "已停止",
+  pending: "排队中", connecting: "连接中", reconnecting: "连接断开",
+  not_found: "记录不存在", load_failed: "加载失败",
+};
 
 export default function MonitorPage({ route }: { route: string }) {
   const toast = useToast();
@@ -23,26 +28,41 @@ export default function MonitorPage({ route }: { route: string }) {
   const [filter, setFilter] = useState("all");
   const logRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
+  const wsRef = useRef<WebSocket | null>(null);
 
-  // load past data if the run already exists
+  // load past data if the run already exists; WS lifecycle owned by THIS effect
+  // (alive flag + wsRef) so switching runs can't leak sockets or mix streams
   useEffect(() => {
     if (!runId) return;
+    let alive = true;
+    setEvents([]); setLogs([]); setSamples([]); setPhaseRate(null);
+    setDetail(null); setUcm(null); setPhase(""); setRound(0);
+    setStatus("connecting");
+    const toLog = (line: string) => ({
+      line, err: line.includes("ERROR") || line.startsWith("[exit"),
+      warn: line.includes("WARN"),
+    });
     api.get<any>(`/api/runs/${runId}`).then((d) => {
+      if (!alive) return;
       setDetail(d);
       setStatus(d.status);
       setTotalRounds((d.config?.rounds ?? [1]).length || 1);
       const rounds: RoundRow[] = d.rounds ?? [];
       const lastFull = [...rounds].reverse().find((r) => r.phase === "full");
       if (lastFull) setPhaseRate({ per_dp: lastFull.hit_rate?.per_dp, agg: lastFull.hit_rate?.aggregated, phase: "full" });
+      // backfill the log tail so mid-run monitoring shows history too
+      api.get<{ lines: string[] }>(`/api/runs/${runId}/logs?tail=500`).then((r) => {
+        if (alive) setLogs((r.lines ?? []).map(toLog));
+      }).catch(() => {});
       // completed runs: replay persisted timeseries so charts still render
       api.get<{ samples: any[] }>(`/api/runs/${runId}/metrics`).then((r) => {
+        if (!alive) return;
         const gauges = new Set(["running", "waiting", "swapped", "kv_usage"]);
         const flatSamples = (r.samples ?? []).map((s) => {
           const engines: Record<string, Record<string, number>> = s.engines ?? {};
           let flat: Record<string, number> = {};
           for (const counters of Object.values(engines)) {
             for (const [k, v] of Object.entries(counters)) {
-              const gauges = new Set(["running", "waiting", "swapped", "kv_usage"]);
               flat[k] = gauges.has(k) ? Math.max(flat[k] ?? 0, Number(v)) : (flat[k] ?? 0) + Number(v);
             }
           }
@@ -53,18 +73,16 @@ export default function MonitorPage({ route }: { route: string }) {
       }).catch(() => {});
       if (d.status === "running" || d.status === "pending") {
         const ws = wsRun(runId);
+        wsRef.current = ws;
         ws.onmessage = (m) => {
+          if (!alive) return;
           const ev: Ev = JSON.parse(m.data);
           setEvents((prev) => [...prev.slice(-4000), ev]);
           if (ev.type === "status") {
             setStatus(ev.status); setPhase(ev.phase ?? ""); setRound(ev.round ?? 0);
             setTotalRounds(ev.total_rounds ?? 1);
           } else if (ev.type === "log") {
-            const line = ev.line as string;
-            setLogs((prev) => [...prev.slice(-3000), {
-              line, err: line.includes("ERROR") || line.startsWith("[exit"),
-              warn: line.includes("WARN"),
-            }]);
+            setLogs((prev) => [...prev.slice(-3000), toLog(ev.line as string)]);
           } else if (ev.type === "metrics") {
             setSamples((prev) => [...prev.slice(-600), { ts: ev.ts, flat: ev.sample.flat }]);
             if (ev.sample?.ucm_detected != null) setUcm(ev.sample.ucm_detected);
@@ -74,10 +92,14 @@ export default function MonitorPage({ route }: { route: string }) {
             toast(ev.message);
           }
         };
-        ws.onclose = () => {};
-        return () => ws.close();
+        ws.onclose = () => { if (alive && (d.status === "running")) setStatus("reconnecting"); };
       }
-    }).catch(() => {});
+    }).catch(() => { if (alive) setStatus("not_found"); });
+    return () => {
+      alive = false;
+      wsRef.current?.close();
+      wsRef.current = null;
+    };
   }, [runId]);
 
   useEffect(() => {
@@ -156,11 +178,18 @@ export default function MonitorPage({ route }: { route: string }) {
       )}
       {runId && (
         <>
+          {(status === "not_found" || status === "load_failed") && (
+            <div className="alert error" style={{ marginBottom: 14 }}>
+              <span>✕</span><div>无法加载该运行记录（可能已被删除，或 Sidecar 离线）。</div>
+            </div>
+          )}
           <div className="run-head">
             <span className="pulse" style={{ background: status === "running" ? undefined : "#6d7078", animation: status === "running" ? undefined : "none" }} />
             <h2>{runId}</h2>
             <span className="tag">{detail?.name}</span>
-            <span className="tag">{status}</span>
+            <span className="tag" style={{ color: status === "failed" ? "var(--danger)" : undefined }}>
+              {STATUS_TEXT[status] ?? status}
+            </span>
             {totalRounds > 0 && <span className="tag gray">第 {round || 1} / {totalRounds} 轮</span>}
             {status === "running" && (
               <button className="btn sm danger" style={{ marginLeft: "auto" }}
@@ -174,8 +203,8 @@ export default function MonitorPage({ route }: { route: string }) {
               {status !== "running" ? "✓" : phase === "warmup" ? "●" : "✓"} 预埋 warmup（并发 = dp）
             </div>
             <div className="phase-arrow" />
-            <div className={`phase ${phase === "full" && status === "running" ? "running" : status === "running" ? "" : "done"}`}>
-              全量 full（并发 = max_concurrency）
+            <div className={`phase ${status === "completed" ? "done" : status === "failed" ? "failed" : phase === "full" && status === "running" ? "running" : ""}`}>
+              {status === "failed" ? "✕" : status === "completed" ? "✓" : "•"} 全量 full（并发 = max_concurrency）
             </div>
           </div>
 

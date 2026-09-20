@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, downloadLink, type RunSummary } from "../api";
 import { navigate, useToast } from "../App";
 
@@ -24,21 +24,35 @@ export default function HistoryPage() {
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<any>(null);
   const [open, setOpen] = useState(false);
+  const [offline, setOffline] = useState(false);
 
+  const reqId = useRef(0);
   const load = async () => {
+    const id = ++reqId.current;
     try {
       const params = new URLSearchParams();
       if (q) params.set("q", q);
       if (kind) params.set("kind", kind);
-      setRuns(await api.get<RunSummary[]>(`/api/runs?${params.toString()}`));
-    } catch { /* sidecar offline */ }
+      const rs = await api.get<RunSummary[]>(`/api/runs?${params.toString()}`);
+      if (id !== reqId.current) return; // a newer request already landed
+      setRuns(rs);
+      setOffline(false);
+      // prune selected ids that no longer exist (deleted elsewhere / partial failure)
+      setSel((s) => {
+        const alive = new Set(rs.map((r) => r.run_id));
+        const next = new Set([...s].filter((x) => alive.has(x)));
+        return next.size === s.size ? s : next;
+      });
+    } catch { /* sidecar offline */ setOffline(true); }
   };
   useEffect(() => { load(); const t = setInterval(load, 4000); return () => clearInterval(t); }, [q, kind]);
 
   const openDetail = async (runId: string) => {
-    const d = await api.get<any>(`/api/runs/${runId}`);
-    setDetail(d);
-    setOpen(true);
+    try {
+      const d = await api.get<any>(`/api/runs/${runId}`);
+      setDetail(d);
+      setOpen(true);
+    } catch (e: any) { toast(`无法打开详情：${e.message}`); }
   };
 
   const toggleSel = (id: string) =>
@@ -49,9 +63,9 @@ export default function HistoryPage() {
     if (!ids.length) return;
     if (!confirm(`删除选中的 ${ids.length} 条记录及其全部数据？此操作不可恢复。`)) return;
     try {
-      await api.post("/api/runs/delete-batch", { run_ids: ids });
+      const r = await api.post<{ deleted: string[] }>("/api/runs/delete-batch", { run_ids: ids });
       setSel(new Set());
-      toast(`已删除 ${ids.length} 条记录`);
+      toast(`已删除 ${r.deleted.length} 条记录`);
       load();
     } catch (e: any) { toast(`删除失败：${e.message}`); }
   };
@@ -117,7 +131,7 @@ export default function HistoryPage() {
                 </td>
               </tr>
             ))}
-            {!runs.length && <tr><td colSpan={10} className="muted">暂无运行记录 — 从「新建测试」开始</td></tr>}
+            {!runs.length && <tr><td colSpan={10} className="muted">{offline ? "无法连接 Sidecar — 请检查应用与 Sidecar 状态" : "暂无运行记录 — 从「新建测试」开始"}</td></tr>}
           </tbody>
         </table>
       </div>

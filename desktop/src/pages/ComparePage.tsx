@@ -22,13 +22,19 @@ export default function ComparePage() {
       if (pre) {
         sessionStorage.removeItem("pt-compare-sel");
         try {
-          const ids = JSON.parse(pre) as string[];
-          if (Array.isArray(ids) && ids.length) { setSel(ids); return; }
+          const ids = (JSON.parse(pre) as string[])
+            .filter((id) => manual.some((r) => r.run_id === id)); // drop ghost ids
+          if (ids.length) { setSel(ids); return; }
         } catch { /* corrupted preselect */ }
       }
       setSel((prev) => prev.length ? prev : manual.filter((r) => r.status === "completed").slice(0, 2).map((r) => r.run_id));
     }).catch(() => {});
   }, []);
+
+  // keep the preselect recoverable across F5 (HistoryPage jump overwrites it)
+  useEffect(() => {
+    if (sel.length) sessionStorage.setItem("pt-compare-sel", JSON.stringify(sel));
+  }, [sel]);
 
   const doCompare = async () => {
     if (sel.length < 1) { toast("请至少选择 1 个 run"); return; }
@@ -99,11 +105,11 @@ export default function ComparePage() {
         <div className="card">
           <h3>导出</h3>
           <a className="btn" style={{ width: "100%", marginBottom: 8, justifyContent: "center", display: "flex" }}
-            href={sel.length ? downloadLink(`/api/compare/export?format=xlsx&run_ids=${sel.join(",")}&exclude_warmup=${excludeWarmup}`) : "#"}>
+            href={sel.length ? downloadLink(`/api/compare/export?format=xlsx&run_ids=${sel.join(",")}&exclude_warmup=${excludeWarmup}&exclude_practice=${excludePractice}`) : "#"}>
             ⇒ 导出 xlsx（5 个 Sheet）
           </a>
           <a className="btn" style={{ width: "100%", justifyContent: "center", display: "flex" }}
-            href={sel.length ? downloadLink(`/api/compare/export?format=html&run_ids=${sel.join(",")}&exclude_warmup=${excludeWarmup}`) : "#"} target="_blank" rel="noreferrer">
+            href={sel.length ? downloadLink(`/api/compare/export?format=html&run_ids=${sel.join(",")}&exclude_warmup=${excludeWarmup}&exclude_practice=${excludePractice}`) : "#"} target="_blank" rel="noreferrer">
             ⇱ 离线 HTML 报告
           </a>
         </div>

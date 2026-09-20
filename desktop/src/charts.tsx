@@ -32,7 +32,7 @@ export function LineChart({ series, height = 200, yMax = 100, yMin = 0, fmt,
   if (phaseAt != null) {
     const x = pad.l + (iw * phaseAt) / Math.max(1, n - 1);
     lines.push(
-      <line key="ph" x1={x} y1={pad.t} x2={x} y2={pad.t + ih} stroke="rgba(255,255,255,.22)" strokeDasharray="3 3" />,
+      <line key="ph" x1={x} y1={pad.t} x2={x} y2={pad.t + ih} className="chart-axis" stroke="var(--border2)" strokeDasharray="3 3" />,
       <text key="pht" x={x + 5} y={pad.t + 11} className="chart-axis" fontSize="9">全量开始</text>);
   }
   series.forEach((s, si) => {
@@ -63,7 +63,7 @@ export function Donut({ items, caption }: { items: { v: number; c: string }[]; c
         off += len;
         return el;
       })}
-      <text x="66" y="62" fill="#e9eaec" fontSize="17" fontWeight="700" textAnchor="middle">
+      <text x="66" y="62" className="chart-axis" fontSize="17" fontWeight="700" textAnchor="middle" style={{ fill: "var(--text)" }}>
         {items.reduce((a, b) => a + b.v, 0).toFixed(1)}%
       </text>
       <text x="66" y="78" className="chart-axis" fontSize="9" textAnchor="middle">{caption}</text>

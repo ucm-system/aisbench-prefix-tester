@@ -465,7 +465,8 @@ async def compare_runs(body: CompareReq, authorization: str = Header(default="")
 
 @app.get("/api/compare/export")
 async def compare_export_get(run_ids: str, format: str = "xlsx",
-                             exclude_warmup: bool = True, token: str = "",
+                             exclude_warmup: bool = True,
+                             exclude_practice: bool = True, token: str = "",
                              authorization: str = Header(default="")):
     if token:
         _auth_query(token)
@@ -475,9 +476,9 @@ async def compare_export_get(run_ids: str, format: str = "xlsx",
     if not ids:
         raise HTTPException(status_code=400, detail="run_ids required")
     if format == "xlsx":
-        path = report.export_xlsx(ids, exclude_warmup)
+        path = report.export_xlsx(ids, exclude_warmup, exclude_practice)
     elif format == "html":
-        path = report.export_html(ids, exclude_warmup)
+        path = report.export_html(ids, exclude_warmup, exclude_practice)
     else:
         raise HTTPException(status_code=400, detail="format must be xlsx|html")
     return FileResponse(path, filename=Path(path).name)

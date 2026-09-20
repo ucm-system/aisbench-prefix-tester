@@ -124,6 +124,7 @@ tr:hover td{background:var(--hover-row)}
 .phase:first-child{border-radius:var(--radius-s) 0 0 var(--radius-s)}
 .phase:last-child{border-radius:0 var(--radius-s) var(--radius-s) 0}
 .phase.done{color:var(--green);border-color:rgba(16,163,127,.35);background:rgba(16,163,127,.06)}
+.phase.failed{color:var(--danger);border-color:rgba(229,72,77,.35);background:rgba(229,72,77,.06)}
 .phase.running{color:#fff;border-color:rgba(59,130,246,.5);background:rgba(59,130,246,.12)}
 .phase-arrow{width:18px;height:1px;background:var(--border2)}
 .metric-cards{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:14px}

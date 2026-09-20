@@ -17,7 +17,8 @@ export default function SettingsPage() {
 
   const set = (k: string, v: string) => {
     setSettings((s) => ({ ...s, [k]: v }));
-    api.put("/api/settings", { [k]: v }).catch(() => {});
+    api.put("/api/settings", { [k]: v })
+      .catch((e) => toast(`保存失败：${e.message}`));
   };
 
   return (

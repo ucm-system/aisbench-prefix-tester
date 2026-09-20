@@ -62,14 +62,28 @@ export default function SlaPage() {
   useEffect(() => {
     if (!job || !ACTIVE_STATES.includes(job.state)) return;
     pollRef.current = window.setInterval(async () => {
-      const j = await api.get<Job>(`/api/sla/${job.job_id}`);
-      setJob(j);
-      if (j.state === "done" || j.state === "failed") { toast(j.note); loadHistory(); }
+      try {
+        const j = await api.get<Job>(`/api/sla/${job.job_id}`);
+        setJob(j);
+        if (j.state === "done" || j.state === "failed") { toast(j.note); loadHistory(); }
+      } catch (e: any) {
+        // job vanished (sidecar restart) → mark interrupted instead of stuck
+        if (/404|not found/i.test(String(e.message))) {
+          setJob((p) => p && p.job_id === job.job_id
+            ? { ...p, state: "interrupted", note: p.note || "Sidecar 重启导致任务中断" } : p);
+          loadHistory();
+        }
+      }
     }, 2000);
     return () => { if (pollRef.current) window.clearInterval(pollRef.current); };
   }, [job?.job_id, job?.state]);
 
   const start = async () => {
+    const empty = slaRows.filter((r) => !(r.value > 0));
+    if (empty.length) { toast("有 SLA 条件未填数值（数值 ≤ 0 的条件不会生效）"); return; }
+    if (!Object.keys(slaRows.reduce((a, r) => { a[`${r.metric}_${r.stat}`] = 1; return a; }, {} as Record<string, number>)).length) {
+      toast("至少需要一个 SLA 条件"); return;
+    }
     try {
       const cfg = {
         host_ip: form.host, host_port: form.port, model_name: form.model_name,
@@ -96,8 +110,10 @@ export default function SlaPage() {
 
   const cancel = async () => {
     if (!job) return;
-    await api.post(`/api/sla/${job.job_id}/cancel`).catch(() => {});
-    toast("已请求停止");
+    try {
+      await api.post(`/api/sla/${job.job_id}/cancel`);
+      toast("已请求停止");
+    } catch (e: any) { toast(`停止失败：${e.message}`); }
   };
 
   const showJob = (j: Job) => {
@@ -176,7 +192,7 @@ export default function SlaPage() {
               <input className="inp mono" value={bounds.max} onChange={(e) => setBounds({ ...bounds, max: +e.target.value || 1 })} /></div>
             <div className="field" style={{ maxWidth: 130, alignSelf: "flex-end" }}>
               <button className="btn primary" style={{ width: "100%" }} onClick={start}
-                disabled={!!job && ["pending", "ladder", "bisect", "running"].includes(job.state)}>▶ 开始调优</button></div>
+                disabled={!!job && ACTIVE_STATES.includes(job.state)}>▶ 开始调优</button></div>
           </div>
           <div className="subnote" style={{ marginTop: 8 }}>
             策略：并发从 {bounds.start} 指数爬升（×2）直至 SLA 被打破，再在相邻好/坏探针间二分细化（≤5 轮）。
@@ -200,7 +216,8 @@ export default function SlaPage() {
               <div className="v">{job.max_ok != null ? job.max_ok
                 : job.state === "done" ? "0"
                 : job.state === "interrupted" ? "—" : "搜索中…"}</div>
-              <div className="s">{job.note || STATE_TEXT[job.state] || job.state} · {STATE_TEXT[job.state] ?? job.state}
+              <div className="s">{[job.note, STATE_TEXT[job.state] ?? job.state]
+                .filter((s, i, arr) => s && arr.indexOf(s) === i).join(" · ")}
                 {job.current ? ` · 当前并发 ${job.current}` : ""}</div>
             </div>
             <table className="mini-table">
@@ -229,9 +246,9 @@ export default function SlaPage() {
                     {slaLine ? <span><i style={{ background: EXT }} />SLA 上限 {slaLine}ms</span> : null}
                   </div>
                 </div>
-                <BarChart groups={groups} series={[ttftSeries[0], {
-                  data: job.probes.map(() => slaLine ?? 0), color: EXT,
-                }]} />
+                <BarChart groups={groups} series={slaLine != null ? [ttftSeries[0], {
+                  data: job.probes.map(() => slaLine), color: EXT,
+                }] : [ttftSeries[0]]} />
               </div>
             )}
           </>

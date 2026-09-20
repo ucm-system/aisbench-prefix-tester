@@ -12,12 +12,14 @@ from . import compare as compare_mod
 from . import config, store
 
 # --------------------------------------------------------------------------- xlsx
-def export_xlsx(run_ids: list[str], exclude_warmup: bool = True) -> str:
+def export_xlsx(run_ids: list[str], exclude_warmup: bool = True,
+                exclude_practice: bool = True) -> str:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
-    result = compare_mod.compare(run_ids, exclude_warmup=exclude_warmup)
+    result = compare_mod.compare(run_ids, exclude_warmup=exclude_warmup,
+                                 exclude_practice=exclude_practice)
     wb = Workbook()
     header_fill = PatternFill("solid", fgColor="1F3864")
     header_font = Font(color="FFFFFF", bold=True)
@@ -178,8 +180,10 @@ def _svg_radar(axes: list[str], series: list[dict], w=330, h=210) -> str:
     return "".join(parts)
 
 
-def export_html(run_ids: list[str], exclude_warmup: bool = True) -> str:
-    result = compare_mod.compare(run_ids, exclude_warmup=exclude_warmup)
+def export_html(run_ids: list[str], exclude_warmup: bool = True,
+                exclude_practice: bool = True) -> str:
+    result = compare_mod.compare(run_ids, exclude_warmup=exclude_warmup,
+                                 exclude_practice=exclude_practice)
     ids = result["runs"]
     names = result["names"]
 
