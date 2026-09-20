@@ -44,7 +44,10 @@ class TokenizerWrapper:
         from transformers import AutoTokenizer
 
         self.path = tokenizer_path
-        self._tok = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
+        # tokenizer paths are always local dirs (tokenizer_mgr.resolve) —
+        # local_files_only keeps loading deterministic and network-free
+        self._tok = AutoTokenizer.from_pretrained(
+            tokenizer_path, trust_remote_code=True, local_files_only=True)
         self._safe_token_ids: Optional[List[int]] = None
         self._safe_words: Optional[List[str]] = None
 
