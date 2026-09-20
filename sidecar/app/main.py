@@ -12,6 +12,7 @@ import json
 import logging
 import secrets
 import shlex
+import shutil
 import threading
 import time
 import uuid
@@ -320,9 +321,42 @@ async def runs_create(body: RunCreateReq, authorization: str = Header(default=""
 
 @app.get("/api/runs")
 async def runs_list(status: str | None = None, q: str | None = None,
+                    kind: str | None = None,
                     authorization: str = Header(default="")):
     _auth(authorization)
-    return store.list_runs(status, q)
+    return store.list_runs(status, q, kind)
+
+
+class DeleteRunsReq(BaseModel):
+    run_ids: list[str]
+
+
+def _delete_run_payload(run_id: str) -> None:
+    d = store.get_run(run_id)
+    if d and d.get("status") == "running":
+        runner.stop_run(run_id)
+    store.delete_run(run_id)
+    shutil.rmtree(config.outputs_dir() / run_id, ignore_errors=True)
+
+
+@app.delete("/api/runs/{run_id}")
+async def run_delete(run_id: str, authorization: str = Header(default="")):
+    _auth(authorization)
+    if not store.get_run(run_id):
+        raise HTTPException(status_code=404, detail="run not found")
+    _delete_run_payload(run_id)
+    return {"ok": True, "deleted": [run_id]}
+
+
+@app.post("/api/runs/delete-batch")
+async def runs_delete_batch(body: DeleteRunsReq, authorization: str = Header(default="")):
+    _auth(authorization)
+    deleted = []
+    for rid in body.run_ids:
+        if store.get_run(rid):
+            _delete_run_payload(rid)
+            deleted.append(rid)
+    return {"ok": True, "deleted": deleted}
 
 
 @app.get("/api/runs/{run_id}")
@@ -479,6 +513,36 @@ async def sla_start(body: SlaStartReq, authorization: str = Header(default="")):
     job_id = sla.start_job(body.config, body.sla, body.start_concurrency,
                            body.max_concurrency, asyncio.get_running_loop())
     return {"job_id": job_id}
+
+
+_SLAS_ACTIVE = ("pending", "running", "ladder", "bisect")
+
+
+@app.get("/api/sla/jobs")
+async def sla_jobs(authorization: str = Header(default="")):
+    """Job history (DB-persisted); stale non-terminal rows are marked interrupted."""
+    _auth(authorization)
+    jobs = store.list_sla_jobs()
+    for j in jobs:
+        if j["state"] in _SLAS_ACTIVE and not sla.is_alive(j["job_id"]):
+            j["state"] = "interrupted"
+    return jobs
+
+
+@app.get("/api/sla/current")
+async def sla_current(authorization: str = Header(default="")):
+    """Live in-process job if any, else the most recent persisted job (for
+    restoring the SLA page after navigation or app restart)."""
+    _auth(authorization)
+    jobs = store.list_sla_jobs()
+    if not jobs:
+        return {"job": None}
+    latest = jobs[0]
+    if sla.is_alive(latest["job_id"]):
+        return {"job": sla.get_job(latest["job_id"])}
+    if latest["state"] in _SLAS_ACTIVE:
+        latest["state"] = "interrupted"
+    return {"job": latest}
 
 
 @app.get("/api/sla/{job_id}")

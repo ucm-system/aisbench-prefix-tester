@@ -23,7 +23,12 @@ CREATE TABLE IF NOT EXISTS runs (
   run_id TEXT PRIMARY KEY,
   name TEXT, status TEXT, created_at REAL, finished_at REAL,
   config_json TEXT, model_name TEXT, host TEXT,
-  is_practice INTEGER DEFAULT 0, notes TEXT DEFAULT ''
+  is_practice INTEGER DEFAULT 0, notes TEXT DEFAULT '',
+  kind TEXT DEFAULT 'manual'
+);
+CREATE TABLE IF NOT EXISTS sla_jobs (
+  job_id TEXT PRIMARY KEY, created_at REAL, state TEXT, sla_json TEXT,
+  max_ok INTEGER, note TEXT, probes_json TEXT DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS rounds (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,8 +59,18 @@ def connect() -> sqlite3.Connection:
             _CONN.row_factory = sqlite3.Row
             _CONN.execute("PRAGMA journal_mode=WAL")
             _CONN.executescript(SCHEMA)
+            _migrate(_CONN)
             _CONN.commit()
         return _CONN
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    """Lightweight migrations for DBs created before a column existed."""
+    cols = {r["name"] for r in con.execute("PRAGMA table_info(runs)").fetchall()}
+    if "kind" not in cols:
+        con.execute("ALTER TABLE runs ADD COLUMN kind TEXT DEFAULT 'manual'")
+        # backfill: pre-kind SLA probe runs are named "SLA c=<n> · ..."
+        con.execute("UPDATE runs SET kind='sla' WHERE kind='manual' AND name LIKE 'SLA c=%'")
 
 
 def _row_to_dict(row: sqlite3.Row | None) -> dict | None:
@@ -63,12 +78,12 @@ def _row_to_dict(row: sqlite3.Row | None) -> dict | None:
 
 
 # ---------------------------------------------------------------- runs
-def create_run(cfg: dict, name: str = "") -> str:
+def create_run(cfg: dict, name: str = "", kind: str = "manual") -> str:
     run_id = time.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:4]
     with _LOCK:
         connect().execute(
-            "INSERT INTO runs (run_id, name, status, created_at, config_json, model_name, host)"
-            " VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO runs (run_id, name, status, created_at, config_json, model_name, host, kind)"
+            " VALUES (?,?,?,?,?,?,?,?)",
             (
                 run_id,
                 name or cfg.get("test_name", "") or run_id,
@@ -77,6 +92,7 @@ def create_run(cfg: dict, name: str = "") -> str:
                 json.dumps(cfg, ensure_ascii=False),
                 cfg.get("model_name", ""),
                 f"{cfg.get('host_ip', '')}:{cfg.get('host_port', '')}",
+                kind,
             ),
         )
         connect().commit()
@@ -101,7 +117,8 @@ def get_run(run_id: str) -> dict | None:
     return d
 
 
-def list_runs(status: str | None = None, q: str | None = None) -> list[dict]:
+def list_runs(status: str | None = None, q: str | None = None,
+              kind: str | None = None) -> list[dict]:
     sql = "SELECT * FROM runs"
     conds, params = [], []
     if status:
@@ -110,6 +127,9 @@ def list_runs(status: str | None = None, q: str | None = None) -> list[dict]:
     if q:
         conds.append("(run_id LIKE ? OR name LIKE ? OR notes LIKE ?)")
         params += [f"%{q}%"] * 3
+    if kind:
+        conds.append("kind=?")
+        params.append(kind)
     if conds:
         sql += " WHERE " + " AND ".join(conds)
     sql += " ORDER BY created_at DESC"
@@ -280,3 +300,44 @@ def set_setting(key: str, value: str) -> None:
     with _LOCK:
         connect().execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)", (key, value))
         connect().commit()
+
+
+# ---------------------------------------------------------------- sla jobs
+def save_sla_job(job: dict) -> None:
+    """Upsert a SLA tuner snapshot so job history survives sidecar restarts."""
+    with _LOCK:
+        connect().execute(
+            "INSERT OR REPLACE INTO sla_jobs (job_id, created_at, state, sla_json,"
+            " max_ok, note, probes_json) VALUES (?,?,?,?,?,?,?)",
+            (
+                job["job_id"],
+                job.get("created_at") or time.time(),
+                job.get("state", "pending"),
+                json.dumps(job.get("sla") or {}, ensure_ascii=False),
+                job.get("max_ok"),
+                job.get("note", ""),
+                json.dumps(job.get("probes") or [], ensure_ascii=False),
+            ),
+        )
+        connect().commit()
+
+
+def get_sla_job(job_id: str) -> dict | None:
+    with _LOCK:
+        row = connect().execute("SELECT * FROM sla_jobs WHERE job_id=?", (job_id,)).fetchone()
+    return _sla_row(row)
+
+
+def list_sla_jobs() -> list[dict]:
+    with _LOCK:
+        rows = connect().execute("SELECT * FROM sla_jobs ORDER BY created_at DESC").fetchall()
+    return [_sla_row(r) for r in rows]
+
+
+def _sla_row(row: sqlite3.Row | None) -> dict | None:
+    if row is None:
+        return None
+    d = {k: row[k] for k in row.keys()}
+    d["sla"] = json.loads(d.pop("sla_json") or "{}")
+    d["probes"] = json.loads(d.pop("probes_json") or "[]")
+    return d

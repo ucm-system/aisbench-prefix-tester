@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type RunSummary } from "../api";
+import { api, type RunSummary, type SlaJob } from "../api";
 import { BarChart } from "../charts";
 import { useToast } from "../App";
 
@@ -9,12 +9,14 @@ type Probe = {
   tpot_p90_ms?: number; output_token_throughput?: number;
   hbm_hit_rate?: number; ext_hit_rate?: number; state?: string;
 };
-type Job = {
-  job_id: string; state: string; sla: Record<string, number>;
-  max_ok: number | null; probes: Probe[]; note: string; current?: number;
-};
+type Job = SlaJob;
 
 const HBM = "#4f8bff", EXT = "#13c2c2";
+const ACTIVE_STATES = ["pending", "running", "ladder", "bisect"];
+const STATE_TEXT: Record<string, string> = {
+  pending: "排队中", running: "运行中", ladder: "爬坡搜索", bisect: "二分细化",
+  done: "已完成", failed: "失败", cancelled: "已取消", interrupted: "已中断",
+};
 
 export default function SlaPage() {
   const toast = useToast();
@@ -30,7 +32,25 @@ export default function SlaPage() {
   ]);
   const [bounds, setBounds] = useState({ start: 8, max: 128 });
   const [job, setJob] = useState<Job | null>(null);
+  const [history, setHistory] = useState<Job[]>([]);
   const pollRef = useRef<number | null>(null);
+
+  const loadHistory = () => {
+    api.get<Job[]>("/api/sla/jobs").then((js) =>
+      setHistory(js.filter((j) => j.state !== "pending"))).catch(() => {});
+  };
+
+  // restore: live in-process job first, else the most recent persisted job —
+  // navigating away and back (or an app restart) no longer loses the view
+  useEffect(() => {
+    api.get<{ job: Job | null }>("/api/sla/current").then((r) => {
+      if (r.job) setJob(r.job);
+    }).catch(() => {
+      const id = localStorage.getItem("pt-sla-last-job");
+      if (id) api.get<Job>(`/api/sla/${id}`).then(setJob).catch(() => {});
+    });
+    loadHistory();
+  }, []);
 
   useEffect(() => {
     api.get<{ name: string }[]>("/api/tokenizers").then((t) => {
@@ -40,11 +60,11 @@ export default function SlaPage() {
   }, []);
 
   useEffect(() => {
-    if (!job || job.state === "done" || job.state === "failed" || job.state === "cancelled") return;
+    if (!job || !ACTIVE_STATES.includes(job.state)) return;
     pollRef.current = window.setInterval(async () => {
       const j = await api.get<Job>(`/api/sla/${job.job_id}`);
       setJob(j);
-      if (j.state === "done" || j.state === "failed") toast(j.note);
+      if (j.state === "done" || j.state === "failed") { toast(j.note); loadHistory(); }
     }, 2000);
     return () => { if (pollRef.current) window.clearInterval(pollRef.current); };
   }, [job?.job_id, job?.state]);
@@ -69,9 +89,25 @@ export default function SlaPage() {
         start_concurrency: bounds.start, max_concurrency: bounds.max,
       });
       setJob({ job_id: r.job_id, state: "pending", sla: {}, max_ok: null, probes: [], note: "" });
+      localStorage.setItem("pt-sla-last-job", r.job_id);
       toast(`SLA 调优已启动：${r.job_id}`);
     } catch (e: any) { toast(`启动失败：${e.message}`); }
   };
+
+  const cancel = async () => {
+    if (!job) return;
+    await api.post(`/api/sla/${job.job_id}/cancel`).catch(() => {});
+    toast("已请求停止");
+  };
+
+  const showJob = (j: Job) => {
+    // live job → pull fresh snapshot; persisted history → use the row as-is
+    if (ACTIVE_STATES.includes(j.state)) {
+      api.get<Job>(`/api/sla/${j.job_id}`).then(setJob).catch(() => setJob(j));
+    } else setJob(j);
+  };
+
+  const fmtT = (t?: number) => t ? new Date(t * 1000).toLocaleString("zh-CN", { hour12: false }) : "—";
 
   const groups = job?.probes.map((p) => `c${p.concurrency}`) ?? [];
   const ttftSeries = [{ data: job?.probes.map((p) => p.ttft_p90_ms ?? 0) ?? [], color: HBM }];
@@ -149,15 +185,23 @@ export default function SlaPage() {
         </div>
       </div>
 
-      <div className="card summary-card">
-        <h3>调优结果</h3>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div className="card">
+        <h3>调优结果
+          {job && ACTIVE_STATES.includes(job.state) && (
+            <button className="btn sm danger" style={{ marginLeft: "auto" }} onClick={cancel}>■ 停止</button>
+          )}
+        </h3>
         {!job && <div className="subnote">配置目标与 SLA 后点击「开始调优」。每个探针 ≈ 一次真实压测，整个过程约几分钟。</div>}
         {job && (
           <>
             <div className="mcard" style={{ marginBottom: 12 }}>
               <div className="t">SLA 内最大并发</div>
-              <div className="v">{job.max_ok != null ? job.max_ok : job.state === "done" ? "0" : "搜索中…"}</div>
-              <div className="s">{job.note} · 阶段 {job.state}{job.current ? ` · 当前并发 ${job.current}` : ""}</div>
+              <div className="v">{job.max_ok != null ? job.max_ok
+                : job.state === "done" ? "0"
+                : job.state === "interrupted" ? "—" : "搜索中…"}</div>
+              <div className="s">{job.note || STATE_TEXT[job.state] || job.state} · {STATE_TEXT[job.state] ?? job.state}
+                {job.current ? ` · 当前并发 ${job.current}` : ""}</div>
             </div>
             <table className="mini-table">
               <thead><tr><th>并发</th><th>TTFT P90</th><th>TPOT avg</th><th>吞吐</th><th>SLA</th></tr></thead>
@@ -192,6 +236,28 @@ export default function SlaPage() {
             )}
           </>
         )}
+      </div>
+
+      <div className="card">
+        <h3>历史调优 <span className="sec-tag">独立于「运行记录」· 点击行加载详情</span></h3>
+        <table className="mini-table">
+          <thead><tr><th>时间</th><th>状态</th><th>SLA 内最大并发</th><th>说明</th></tr></thead>
+          <tbody>
+            {history.map((h) => (
+              <tr key={h.job_id} style={{ cursor: "pointer" }} onClick={() => showJob(h)}>
+                <td>{fmtT(h.created_at)}</td>
+                <td><span className={`tag ${h.state === "done" ? "blue" : h.state === "failed" ? "gray" : "warn"}`}
+                  style={{ padding: "1px 7px" }}>{STATE_TEXT[h.state] ?? h.state}</span></td>
+                <td><b>{h.max_ok != null ? h.max_ok : "—"}</b></td>
+                <td className="muted" style={{ fontSize: 11 }}>
+                  {(h.sla && Object.keys(h.sla).length) ? Object.entries(h.sla).map(([k, v]) => `${k}≤${v}`).join("，") : h.note || "—"}
+                </td>
+              </tr>
+            ))}
+            {!history.length && <tr><td colSpan={4} className="muted">暂无历史调优</td></tr>}
+          </tbody>
+        </table>
+      </div>
       </div>
     </div>
   );

@@ -58,6 +58,13 @@ def get_job(job_id: str) -> Optional[dict]:
     return t.snapshot() if t else None
 
 
+def is_alive(job_id: str) -> bool:
+    """True while the tuner thread is registered in this process (a DB row
+    whose job is NOT alive and still shows a non-terminal state is stale)."""
+    with _lock:
+        return job_id in _JOBS
+
+
 def cancel_job(job_id: str) -> bool:
     with _lock:
         t = _JOBS.get(job_id)
@@ -83,18 +90,25 @@ class SlaTuner(threading.Thread):
         self.max_ok: Optional[int] = None
         self.dataset_files: Optional[dict] = None
         self.note = ""
+        self.created_at = time.time()
 
     # ---------------------------------------------------------------- state
     def snapshot(self) -> dict:
         with _lock:
             return {
                 "job_id": self.job_id, "state": self.state,
+                "created_at": self.created_at,
                 "sla": self.sla, "max_ok": self.max_ok,
                 "probes": [dict(p) for p in self.probes], "note": self.note,
+                "current": getattr(self, "current", None),
             }
 
     def _publish(self):
         events.publish("*", "sla", **self.snapshot())
+        try:
+            store.save_sla_job(self.snapshot())
+        except Exception:  # noqa: BLE001 — persistence must never break tuning
+            pass
 
     def _set(self, state: str, **kw):
         self.state = state
@@ -110,7 +124,8 @@ class SlaTuner(threading.Thread):
         if self.dataset_files:
             cfg["dataset_files"] = self.dataset_files
         cfg.pop("rounds", None)
-        run_id = store.create_run(cfg, name=f"SLA c={concurrency} · {self.base_cfg.get('test_name', '')}")
+        run_id = store.create_run(cfg, name=f"SLA c={concurrency} · {self.base_cfg.get('test_name', '')}",
+                                  kind="sla")
         runner.start_run(run_id, self.loop)
         while True:
             if self.cancelled.is_set():

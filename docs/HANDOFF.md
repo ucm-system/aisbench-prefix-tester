@@ -97,3 +97,13 @@
 1. ~~修 §5 exe 子模式 bug~~ ✅ 已完成（2026-09-20 晚，见 §5）。剩余跟进：用 electron-builder 重新打 portable 包（`D:\pt-release` 里仍是旧 sidecar），并验证首启动完整性自检。
 2. 按 §6 姿势 A 重写 3P1D 内层脚本（MooncakeConnectorV1 + dp1/tp1 + 代理），跑通后用工具实测 pod 维度（per_pod 命中率表、多端口采集时序）。
 3. 可选：UWM/横向扩展、报告模板美化、README 更新 PD 章节。
+
+## 10. UX 优化记录（2026-09-20 深夜，5 项体验反馈已落地）
+
+1. **SLA 页状态不再丢失**：SLA job 落库（`sla_jobs` 表，含 probes 快照），新增 `GET /api/sla/current`（优先返回存活 job，否则最近一条持久化记录，中断的标 `interrupted`）与 `GET /api/sla/jobs`；SLA 页挂载时自动恢复，另有「历史调优」列表（点击加载详情）与「停止」按钮。附带修复：job snapshot 此前不含 `current` 字段导致 UI 永远不显示当前并发。
+2. **SLA 记录与运行记录分离**：runs 表新增 `kind` 列（`manual`/`sla`，迁移自动回填历史 `SLA c=*` 记录）；SLA 探针 run 以 `kind='sla'` 创建。
+3. **运行记录管理**：新增 `DELETE /api/runs/{id}`（运行中的先 stop）与 `POST /api/runs/delete-batch`，删除时同步清理 `outputs/<run_id>`；History 支持多选批量删除 + 「对比所选」直通对比页（sessionStorage 预选），对比页选择列表不再混入 SLA 探针。
+4. **History 默认只看手动测试**，seg 切换「手动测试 / SLA 探针 / 全部」（SLA 行在全部分类下带蓝色标签）。
+5. **主题修复**：设置页主题下拉原为非受控 `defaultValue`，永远显示「跟随系统」→ 改受控并即时应用；浅色主题全面修复对比度——约 20 处硬编码深色值（表格行线/悬停、logview 配色、tag/alert/phase、seg/tabs/导航高亮文字、滚动条、actionbar、toast、`color-scheme:dark` 强制）改为 CSS 变量并补浅色映射。
+
+验证：`tools/tests/test_features.py` 新增 store kinds/delete/sla-jobs 用例，全绿；API 层冒烟（kind 过滤、单条/批量删除、SLA 路由）通过；`npm run build` 通过。

@@ -15,8 +15,18 @@ export default function ComparePage() {
 
   useEffect(() => {
     api.get<RunSummary[]>("/api/runs").then((rs) => {
-      setRuns(rs);
-      setSel((prev) => prev.length ? prev : rs.filter((r) => r.status === "completed").slice(0, 2).map((r) => r.run_id));
+      // SLA probe runs live on the SLA page; keep the compare picker manual-only
+      const manual = rs.filter((r) => r.kind !== "sla");
+      setRuns(manual);
+      const pre = sessionStorage.getItem("pt-compare-sel");
+      if (pre) {
+        sessionStorage.removeItem("pt-compare-sel");
+        try {
+          const ids = JSON.parse(pre) as string[];
+          if (Array.isArray(ids) && ids.length) { setSel(ids); return; }
+        } catch { /* corrupted preselect */ }
+      }
+      setSel((prev) => prev.length ? prev : manual.filter((r) => r.status === "completed").slice(0, 2).map((r) => r.run_id));
     }).catch(() => {});
   }, []);
 

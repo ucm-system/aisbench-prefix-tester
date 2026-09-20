@@ -10,19 +10,30 @@ const STATUS_TEXT: Record<string, string> = {
   completed: "已完成", running: "运行中", failed: "失败", cancelled: "已停止", pending: "排队中",
 };
 
+const KIND_CHIPS = [
+  { key: "manual", label: "手动测试" },
+  { key: "sla", label: "SLA 探针" },
+  { key: "", label: "全部" },
+];
+
 export default function HistoryPage() {
   const toast = useToast();
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [q, setQ] = useState("");
+  const [kind, setKind] = useState("manual"); // default: hide SLA probe runs
+  const [sel, setSel] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<any>(null);
   const [open, setOpen] = useState(false);
 
   const load = async () => {
     try {
-      setRuns(await api.get<RunSummary[]>(`/api/runs${q ? `?q=${encodeURIComponent(q)}` : ""}`));
+      const params = new URLSearchParams();
+      if (q) params.set("q", q);
+      if (kind) params.set("kind", kind);
+      setRuns(await api.get<RunSummary[]>(`/api/runs?${params.toString()}`));
     } catch { /* sidecar offline */ }
   };
-  useEffect(() => { load(); const t = setInterval(load, 4000); return () => clearInterval(t); }, [q]);
+  useEffect(() => { load(); const t = setInterval(load, 4000); return () => clearInterval(t); }, [q, kind]);
 
   const openDetail = async (runId: string) => {
     const d = await api.get<any>(`/api/runs/${runId}`);
@@ -30,27 +41,67 @@ export default function HistoryPage() {
     setOpen(true);
   };
 
+  const toggleSel = (id: string) =>
+    setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const allSel = runs.length > 0 && runs.every((r) => sel.has(r.run_id));
+
+  const delMany = async (ids: string[]) => {
+    if (!ids.length) return;
+    if (!confirm(`删除选中的 ${ids.length} 条记录及其全部数据？此操作不可恢复。`)) return;
+    try {
+      await api.post("/api/runs/delete-batch", { run_ids: ids });
+      setSel(new Set());
+      toast(`已删除 ${ids.length} 条记录`);
+      load();
+    } catch (e: any) { toast(`删除失败：${e.message}`); }
+  };
+
+  const compareSel = () => {
+    if (sel.size < 2) { toast("对比至少选择 2 条记录"); return; }
+    sessionStorage.setItem("pt-compare-sel", JSON.stringify([...sel]));
+    navigate("/compare");
+  };
+
   const fmtTime = (t: number) => new Date(t * 1000).toLocaleString("zh-CN", { hour12: false });
 
   return (
     <>
       <div className="toolbar">
-        <input className="inp" placeholder="搜索 run_id / 名称 / 备注…" style={{ maxWidth: 260 }}
+        <div className="seg">
+          {KIND_CHIPS.map((c) => (
+            <span key={c.key} className={kind === c.key ? "on" : ""}
+              onClick={() => { setKind(c.key); setSel(new Set()); }}>{c.label}</span>
+          ))}
+        </div>
+        <input className="inp" placeholder="搜索 run_id / 名称 / 备注…" style={{ maxWidth: 240 }}
           value={q} onChange={(e) => setQ(e.target.value)} />
         <span className="muted" style={{ marginLeft: "auto" }}>共 {runs.length} 条记录</span>
+        <button className="btn sm" disabled={sel.size < 2} onClick={compareSel}>
+          ⇄ 对比所选{sel.size >= 2 ? `（${sel.size}）` : ""}
+        </button>
+        <button className="btn sm danger" disabled={!sel.size} onClick={() => delMany([...sel])}>
+          删除所选{sel.size ? `（${sel.size}）` : ""}
+        </button>
       </div>
       <div className="card" style={{ padding: "6px 4px" }}>
         <table>
           <thead><tr>
-            <th style={{ width: 34 }}></th><th>名称 / run_id</th><th>时间</th>
+            <th style={{ width: 30 }}>
+              <input type="checkbox" checked={allSel}
+                onChange={(e) => setSel(e.target.checked ? new Set(runs.map((r) => r.run_id)) : new Set())} />
+            </th>
+            <th>名称 / run_id</th><th>时间</th>
             <th>HBM</th><th>Ext</th><th>TTFT avg</th><th>吞吐</th><th>轮次</th><th style={{ width: 210 }}></th>
           </tr></thead>
           <tbody>
             {runs.map((r) => (
               <tr key={r.run_id} style={{ cursor: "pointer" }} onClick={() => openDetail(r.run_id)}>
-                <td><span className="status-p"><i style={{ background: STATUS_COLOR[r.status] ?? "var(--muted)" }} /></span></td>
-                <td><b>{r.name}{r.is_practice ? " " : ""}</b>
-                  {r.is_practice ? <span className="tag warn" style={{ padding: "1px 7px" }}>练习轮</span> : null}
+                <td onClick={(e) => e.stopPropagation()}>
+                  <input type="checkbox" checked={sel.has(r.run_id)} onChange={() => toggleSel(r.run_id)} />
+                </td>
+                <td><b>{r.name}</b>
+                  {kind === "" && r.kind === "sla" ? <span className="tag blue" style={{ padding: "1px 7px", marginLeft: 6 }}>SLA</span> : null}
+                  {r.is_practice ? <span className="tag warn" style={{ padding: "1px 7px", marginLeft: 6 }}>练习轮</span> : null}
                   <br /><span className="muted mono" style={{ fontSize: 11 }}>{r.run_id}</span></td>
                 <td>{fmtTime(r.created_at)}</td>
                 <td><b>{r.summary ? `${(r.summary.hbm_hit_rate * 100).toFixed(1)}%` : "—"}</b></td>
@@ -62,16 +113,11 @@ export default function HistoryPage() {
                   <button className="btn sm" onClick={() => navigate(`/monitor/${r.run_id}`)}>监控</button>
                   <button className="btn sm" onClick={() => openDetail(r.run_id)}>详情</button>
                   <a className="btn sm ghost" href={downloadLink(`/api/runs/${r.run_id}/export?format=xlsx`)}>xlsx</a>
-                  <button className="btn sm danger" onClick={async () => {
-                    if (!confirm(`删除 ${r.run_id} 及其全部数据？`)) return;
-                    await api.del(`/api/runs/${r.run_id}`);
-                    toast("已删除");
-                    load();
-                  }}>删除</button>
+                  <button className="btn sm danger" onClick={() => delMany([r.run_id])}>删除</button>
                 </td>
               </tr>
             ))}
-            {!runs.length && <tr><td colSpan={9} className="muted">暂无运行记录 — 从「新建测试」开始</td></tr>}
+            {!runs.length && <tr><td colSpan={10} className="muted">暂无运行记录 — 从「新建测试」开始</td></tr>}
           </tbody>
         </table>
       </div>

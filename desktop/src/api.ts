@@ -110,10 +110,22 @@ export function downloadLink(path: string): string {
 export type RunSummary = {
   run_id: string; name: string; status: string; created_at: number;
   is_practice: number; notes: string; model_name: string; host: string;
+  kind?: string;
   summary?: {
     hbm_hit_rate: number; ext_hit_rate: number; ttft_avg_ms: number;
     output_token_throughput: number; rounds_done: number;
   };
+};
+export type SlaProbe = {
+  concurrency: number; ok: boolean; run_id?: string; reason?: string; state?: string;
+  ttft_avg_ms?: number; ttft_p90_ms?: number; tpot_avg_ms?: number;
+  tpot_p90_ms?: number; output_token_throughput?: number;
+  hbm_hit_rate?: number; ext_hit_rate?: number;
+};
+export type SlaJob = {
+  job_id: string; state: string; created_at?: number;
+  sla: Record<string, number>; max_ok: number | null;
+  probes: SlaProbe[]; note: string; current?: number;
 };
 export type RoundRow = {
   round_index: number; phase: "warmup" | "full"; is_warmup: number;

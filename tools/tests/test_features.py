@@ -10,6 +10,7 @@ import asyncio
 import json
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -168,6 +169,34 @@ def test_aisbench_env(tmp):
     print("aisbench env injection OK")
 
 
+def test_store_kinds_delete_sla_jobs():
+    """kind filter (manual vs sla), run delete, SLA job persistence."""
+    rid_m = store.create_run({"host_ip": "h", "host_port": 1, "test_name": "t-manual"},
+                             kind="manual")
+    rid_s = store.create_run({"host_ip": "h", "host_port": 1, "test_name": "sla-c8"},
+                             kind="sla")
+    allk = {r["run_id"] for r in store.list_runs()}
+    assert rid_m in allk and rid_s in allk
+    manual = {r["run_id"] for r in store.list_runs(kind="manual")}
+    slak = {r["run_id"] for r in store.list_runs(kind="sla")}
+    assert rid_m in manual and rid_s not in manual
+    assert rid_s in slak and rid_m not in slak
+    store.delete_run(rid_m)
+    assert store.get_run(rid_m) is None
+    assert rid_m not in {r["run_id"] for r in store.list_runs()}
+
+    store.save_sla_job({"job_id": "j1", "state": "done", "sla": {"ttft_p90": 3000},
+                        "max_ok": 16, "note": "ok", "probes": [{"concurrency": 8}]})
+    store.save_sla_job({"job_id": "j2", "state": "ladder", "sla": {}, "max_ok": None,
+                        "note": "", "probes": [], "created_at": time.time() + 5})
+    jobs = store.list_sla_jobs()
+    assert [j["job_id"] for j in jobs] == ["j2", "j1"], "newest first"
+    assert jobs[1]["sla"] == {"ttft_p90": 3000}
+    assert jobs[1]["probes"][0]["concurrency"] == 8
+    assert store.get_sla_job("j1")["state"] == "done"
+    print("store kinds/delete/sla-jobs OK")
+
+
 if __name__ == "__main__":
     tmp = tempfile.mkdtemp(prefix="pt_features_")
     config.init_home(str(tmp))
@@ -177,6 +206,7 @@ if __name__ == "__main__":
     test_pod_and_events()
     test_runner_normalize()
     test_aisbench_env(tmp)
+    test_store_kinds_delete_sla_jobs()
     # compare + reports need runs in the same home
     test_compare_engine(tmp)
     test_reports(tmp)

@@ -137,7 +137,7 @@ export default function App() {
       </div>
       <div id="toast" style={{
         position: "fixed", bottom: 26, left: "50%", transform: `translateX(-50%) translateY(${toastMsg ? 0 : 80}px)`,
-        background: "var(--bg3)", border: "1px solid var(--border2)", color: "#fff",
+        background: "var(--bg3)", border: "1px solid var(--border2)", color: "var(--text)",
         padding: "10px 18px", borderRadius: 10, fontSize: 12.5, zIndex: 99, transition: ".25s",
         boxShadow: "0 10px 30px rgba(0,0,0,.5)",
       }}>{toastMsg}</div>

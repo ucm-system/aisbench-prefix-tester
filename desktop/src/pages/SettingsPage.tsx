@@ -6,6 +6,7 @@ export default function SettingsPage() {
   const toast = useToast();
   const [items, setItems] = useState<{ ok: boolean; name: string; detail: string; hint: string }[]>([]);
   const [settings, setSettings] = useState<Record<string, string>>({});
+  const [theme, setTheme] = useState(localStorage.getItem("pt-theme") || "auto");
 
   const load = () => {
     api.get<any>("/api/diagnosis").then((d) => setItems(d.items)).catch(() => setItems([]));
@@ -67,9 +68,10 @@ export default function SettingsPage() {
         <div className="card">
           <h3>外观</h3>
           <div className="kv"><span>主题</span>
-            <select className="sel" style={{ maxWidth: 150 }} defaultValue="auto"
+            <select className="sel" style={{ maxWidth: 150 }} value={theme}
               onChange={(e) => {
                 const v = e.target.value;
+                setTheme(v);
                 localStorage.setItem("pt-theme", v);
                 if (v === "auto") document.documentElement.removeAttribute("data-theme");
                 else document.documentElement.dataset.theme = v;
@@ -78,7 +80,7 @@ export default function SettingsPage() {
               <option value="light">浅色</option>
               <option value="dark">深色</option>
             </select></div>
-          <div className="kv" style={{ borderBottom: "none" }}><span>默认跟随系统主题，重启后保持</span><span /></div>
+          <div className="kv" style={{ borderBottom: "none" }}><span>即时生效，重启后保持；浅色主题已全面适配对比度</span><span /></div>
         </div>
         <div className="card">
           <h3>关于</h3>
