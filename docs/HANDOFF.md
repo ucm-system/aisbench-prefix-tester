@@ -166,6 +166,15 @@
 
 **遗留 backlog**（按优先级，均已有修复方案在审查报告中）：① `/api/boot`+CORS 完整加固（已做容器门控，CORS `*` 与 `?token=` 留痕待 ticket 化）；② 源码模式共享 workspace 并发串写（模块互斥锁或全模式 config-dir 统一，需真跑 ais_bench 验证）；③ export/compare/logs 大文件同步读改 to_thread/流式；④ metrics 字段语义（`total_input_tokens` 实为均值、-1 哨兵改 null、max_concurrency 类型）；⑤ warmup 退出码忽略导致脏指标入库；⑥ store 异常回滚统一化；⑦ datasets/outputs 保留策略；⑧ compare missing_rounds 用 len 而非最大轮号的口径；⑨ 键盘可达性/aria。
 
+### 第七轮（端到端验证矩阵 + 便携版重建与测试）
+
+- **新增 `tools/tests/test_e2e_battery.py`**：对**打包 sidecar exe**（冻结模式）+ mock vllm 的 21 项端到端矩阵——冻结诊断/内置 tokenizer verify/3 轮多轮时序/取消/双导出/对比+导出/SLA 全链路（含 kind=sla 入库与 run_id 溯源）/跨重启持久化/批量清理。结果 **21/21 PASS**。
+- **便携版重建**：`npx electron-builder --win portable`（D:\pt-release\AISBenchPrefixTester-Portable.exe，345MB）——extraResources 自动打入最新 sidecar onedir（自包含 ais_bench）。注意：重打包前必须杀掉残留的便携实例（旧进程锁住输出文件会导致 builder 无限等待）。
+- **便携版端到端测试 `tools/tests/test_portable.py`**（7/7 PASS）：启动便携 exe → 等待 `%USERPROFILE%\AISBenchPrefixTester\sidecar.port` → 验证 runtime=frozen、自包含声明、内置 AISBench/tokenizer 资产 → 经便携内嵌 sidecar 真实跑 mock 压测（内置 ais_bench 子进程全流程）completed。
+- 结论：`D:\pt-release\AISBenchPrefixTester-Portable.exe` 即当前可分发版本（自包含，目标机器无需任何 Python 环境）。
+
+**遗留 backlog**（按优先级，均已有修复方案在审查报告中）：
+
 ### 第二轮（导航重构，同日）
 
 6. **运行监控不再是独立页签**：侧栏移除「运行监控」「数据集」两项；监控改为跳转式进入——新建测试点「开始测试」后自动跳 `/monitor/<run_id>`（原有逻辑），运行记录每行有「监控」按钮；另在顶栏加全局「● 运行中 <名称>」芯片（5s 轮询，有存活 run 才显示），点击回到实时监控，切走后不会找不到正在跑的任务。默认落地页从 monitor 改为 config；旧 `#/datasets` hash 自动重定向到 `/config`。
