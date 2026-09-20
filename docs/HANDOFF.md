@@ -1,0 +1,78 @@
+# AISBench 前缀复用测试器 — 交割文档（2026-09-20）
+
+> 交接人备注：本文档为完整交割。接手人请先读「当前状态」与「未解决问题 TOP2」。
+
+## 1. 项目概览
+
+- 定位：LLM Prefix Cache 性能测试桌面工具（针对昇腾 NPU / vLLM-Ascend / UCM 分级缓存），AISBench benchmark 的图形化封装。
+- 架构：Electron + React (Vite) 前端 + Python FastAPI sidecar（内嵌 ais_bench 调用）+ 打包分发（PyInstaller onedir + electron-builder portable）。
+- 仓库：https://github.com/ucm-system/aisbench-prefix-tester（私有）
+- 本地路径：`D:\Vibe_Workspace\AISBench_PrefixTest_Tools`
+  - `sidecar/` — FastAPI 服务（app/runner.py 编排、app/metrics.py 指标采集、app/aisbench_env.py 配置注入、run_sidecar.py 冻结入口、aisbench-sidecar.spec 打包）
+  - `desktop/` — React UI（src/pages/：Config/Monitor/History/Compare/Dataset/Settings/SLA）
+  - `tools/` — `pt.py` CLI（给 agent 用）+ SKILL.md + tests/test_features.py（单测，全部通过）
+  - `docs/` — DESIGN.md、HANDOFF.md（本文）、screenshots/
+- 原参考项目：rayn-zzz/aisbench_auto_tools_prefix（口径对齐：命中率=Δhits/Δqueries 快照差分）
+
+## 2. 当前状态（交割时点）
+
+- 功能 v0.1.0 全部完成：api_key、轮次编辑器（表格+JSON，10 个键可按轮覆盖）、SLA 弹性统计（ttft/tpot/e2el × avg/p50..p99/max）、亮暗主题、轻量化打包（783MB→305MB，带 torch 约 1.2GB）、README+截图已推 GitHub。
+- 单实例端到端验证：✅ 完成（源码模式，真实服务器，见 §3）。
+- **exe 子模式端到端：❌ 存在阻断性 bug（§5，接手第一优先级）**。
+- PD 分离（3P1D）：服务端启动失败根因已查明、正确姿势已调研清楚（§6）；工具侧 pod 维度代码已就绪未实测。
+- 服务器：PD 容器已删、8 卡已释放；dxlong-pt-base 容器内 Qwen3-0.6B 单实例服务**正在运行**（203.0.113.10:8101，davinci4），可直接复用或用脚本停掉。
+
+## 3. 单实例验证结论（已完成，可复现）
+
+- 服务：容器 `dxlong-pt-base`，镜像 `quay.io/ascend/vllm-ascend:nightly-releases-v0.26.0rc`（vllm 0.26.0，vllm_ascend 0.19.1rc2.dev1373，mooncake-transfer-engine-npu 0.3.11.post1），模型 `/mnt/model/Qwen3-0.6B`，端口 8101，`--enable-prefix-caching --gpu-memory-utilization 0.35 --max-model-len 8192 --served-model-name qwen3`。
+- 工具配置（UI 实测通过）：host=203.0.113.10:8101，model qwen3，tokenizer 预置 Qwen3-0.6B（本地 `D:\Models\Qwen3-0.6B`），input 4096 / output 32 / data 32 / prefix 4 / repeat 90% / conc 8 / dp 1，采集端点 `203.0.113.10:8101`。
+- 已验证：轮次循环（warmup+full）、命中率达预期（repeat 90% → HBM 命中率≈理论值）、UCM 对比（`dxlong-pt-ucm` 容器 8102，UCMConnector+Posix，ucm:* 指标被识别）、Monitor 实时图 + 完成后时序回放、报告导出。历史 run 在 `%APPDATA%\AISBenchPrefixTester\outputs\`，真实服务器完成 run 共 12 个（如 20260920_160945_075e）。
+
+## 4. 如何运行
+
+- 开发：`cd desktop && npm run dev`（vite 自启 sidecar，写 `.sidecar-dev.json`；UI http://localhost:5173 或 5174）。Python 必须 `py -3.11`（系统 `python` 是无 pip 的 venv）。npm 需 `ELECTRON_MIRROR`（已配 npmmirror）。
+- 设置项（全局共享 `settings.json`）：`aisbench_command`（见 §5 的关键区别）、`work_path`（pip 安装的 ais_bench 的 site-packages 根，本机 `C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages`）。
+- 打包：PyInstaller spec = `sidecar/aisbench-sidecar.spec`；electron-builder 输出 `D:\pt-release`（避免 EPERM）。
+- 单测：`py -3.11 tools/tests/test_features.py`（当前全绿）。
+
+## 5. 未解决问题 TOP1：冻结 exe 子模式真实压测必挂（阻断）
+
+- 现象：`aisbench_command = <dist>\aisbench-sidecar.exe --child-aisbench` 时，真实 run 失败，stdout.log 出现：
+  `PYI-xxxxx ERROR ... app\main.py:720 TypeError: expected str, bytes or os.PathLike object, not NoneType`，随后 `SUMM-FILE-001 can't find detail perf data file`，`AISBench exited with code 1`。
+- 根因（已定位到行）：ais_bench debug 跑法为每 task `subprocess.Popen(cmd, shell=True)`，`cmd` 由 `tasks/openicl_api_infer.py get_command()` 构造：`command = f"{sys.executable} {__file__} {params.py}"`（openicl_api_infer.py 约 128 行；模板见 runners/local.py `get_command_template`）。冻结 exe 内 `sys.executable` 就是 exe 本身 → 该 task 进程重新进入 `run_sidecar.py` 入口，argv 无 `--child-aisbench` → 误入 `_run_server()` → 无 `--home` 参数 → `Path(None)` 崩溃 → task 没跑 → summarizer 无明细 → exit 1。
+- 注意：mock 冒烟（run 20260920_204723_0a04「打包exe child冒烟v28」）是**假阳性**——同样有 4 条 PYI 崩溃但状态被标 completed。验收 exe 模式必须断言 AISBench 明细/perf 数据真实产生。
+- 源码模式没问题：`aisbench_command` 指向真实 python ais_bench（16:03 的三个真实 run 即此模式，0 崩溃）。
+- 修复方向（任选，均未实现）：
+  1. run_sidecar.py 入口加「脚本模式」：`argv[0]` 以 .py 结尾且存在 → `sys.argv=argv[1:]; runpy.run_path(argv[0], run_name="__main__")`（freeze_support() 之后）。**前提**：ais_bench task 脚本在产物里必须是真实文件——当前打包纯模块在嵌入归档里，需在 spec 中对 `ais_bench.benchmark.tasks` 等设 `module_collection_mode='py'`，并核实 `__file__` 解析出的路径真实存在。
+  2. 或在 `--child-aisbench` 入口内 monkeypatch `sys.executable`（指向带标记的自身命令行，注意 shell=True 引号），入口识别标记后走脚本模式。
+  3. 非调试模式（_run_normal）同样用 `sys.executable` 构造命令，换模式不能绕开，必须做 1 或 2。
+
+## 6. PD 分离（3P1D）调研结论（服务端未跑通，但根因与正确姿势已明确）
+
+- 已试：容器 `dxlong-pt-pd`（davinci1/2/3/5）4 个 vllm serve：P0/P1/P2（kv_producer，8111/8112/8113，kv_port 30000-30002，engine_id p0/p1/p2）+ D（kv_consumer，8102，kv_port 30100，engine_id d0，`--no-enable-prefix-caching`），连接器 MooncakeHybridConnector，extra_config 写了全局布局 `prefill:{dp:3,tp:1}`。脚本：`D:\Vibe_Workspace\ucm-server-ops\dxlong_pd3p1d_container.sh` + `dxlong_pd3p1d_inner.sh`。
+- 结果：3 个 P 全挂：`Value error, KV transfer 'prefill' config has a conflicting data parallel size. Expected 1, but got 3.`；D 正常启动。
+- 根因（容器内源码核实 `/vllm-workspace/vllm-ascend/vllm_ascend/utils.py check_kv_extra_config`）：**producer 的 extra_config.prefill.dp_size 必须等于本进程自己的 `--data-parallel-size`；consumer 的 decode.dp_size 必须等于自己的**。即该字段描述「本实例所在侧的并行规模」，单进程 dp=1 时必须写 1。
+- 正确姿势 A（单机多进程 N P + M D，推荐，出自镜像内文档 `docs/source/tutorials/features/pd_disaggregation_mooncake_single_node.md`）：连接器用 **MooncakeConnectorV1**，每个实例 extra_config 的 prefill/decode 均写 `dp_size:1,tp_size:1`；每个 P 用不同 `ASCEND_RT_VISIBLE_DEVICES`+不同 API 端口+唯一 kv_port（"For 2P1D, set ASCEND_RT_VISIBLE_DEVICES and port to different values for each P process"）；前置代理 `examples/disaggregated_prefill_v1/load_balance_proxy_server_example.py --prefiller-hosts X X X --prefiller-ports 8111 8112 8113 --decoder-hosts X --decoder-ports 8102`；**客户端请求发代理端口**。
+- 正确姿势 B（DeepSeek-V4-Flash 教程 §5.2 多机全局 DP，镜像内 `docs/source/tutorials/models/DeepSeek-V4-Flash.md`）：MooncakeHybridConnector + `launch_online_dp.py --dp-size <全局> --dp-size-local <本机> --dp-rank-start --dp-address --dp-rpc-port`；每 P 唯一 kv_port+engine_id（0 起自增）；代理见 `features/pd_disaggregation_mooncake_multi_node.md`；请求发 prefill 主节点的代理端口。
+- 工具侧已就绪待验：metrics 采样键升级为 `(pod, engine, worker)`，`compute_hit_rate` 产出 `per_pod`（`endpoint|dpN`）与 `per_dp`，Monitor「DP 域明细」表按端点分行；时序 JSONL 与前端回放兼容。PD 实测时配置：host_port=代理端口，pod_info=[P0 API, P1 API, P2 API, D API]。
+
+## 7. 服务器与凭据
+
+- 203.0.113.10，root / REDACTED-INTERNAL-CREDENTIAL，工作目录 `/home/dxlong`，运维脚本 `/home/dxlong/ops/`（本地镜像 `D:\Vibe_Workspace\ucm-server-ops\`）。
+- SSH：`py -3.11 C:\Users\user\.claude\skills\ssh-skill\scripts\ssh_execute.py [--timeout N] 203.0.113.10 '<cmd>'`。
+- **命令内禁双引号**（PowerShell 原生参数拆分会吃掉）；复杂命令写本地 .sh → LF 归一化（CRLF 会搞挂服务器脚本）→ base64 → `echo <b64> | base64 -d > x.sh && bash x.sh`。
+- 容器现况：`dxlong-pt-base` UP（8101 服务运行中）；`dxlong-pt-ucm` UP（服务未启动）；`dxlong-pt-pd` 已删除。
+- 重启单实例：`docker exec dxlong-pt-base bash /opt/q3_inner_base.sh`（脚本已在容器内；容器重建用 `dxlong_pt_launch.sh` + `dxlong_pt_q3_inner_base.sh`/`..._ucm.sh`）。
+- 服务器踩坑：`/reset_prefix_cache` 在该 nightly 上 404（轮间隔离走 per_round_seed_offset 兜底）；Qwen3.5 Mamba 混合模型命中率恒 0（1024 token 对齐），测前缀请用 Qwen3-0.6B。
+
+## 8. 本机环境坑（速查）
+
+- `python` 是无 pip 的 venv，一律 `py -3.11`；vite v6 只绑 ::1 → 用 localhost；系统代理 127.0.0.1:7892 会劫持压测流量 → sidecar 采集已 `trust_env=False`，curl 记得 `--noproxy '*'`；git push 需 `git -c http.proxy=http://127.0.0.1:7892 push`。
+- 本机 sidecar 输出/设置目录：`%APPDATA%\AISBenchPrefixTester\`（outputs、settings.json）。
+- mock vllm：本机 8091 仍在跑（PID 见 netstat），仅用于 UI 冒烟。
+
+## 9. 接手人待办（建议顺序）
+
+1. 修 §5 exe 子模式 bug（script-mode + spec `module_collection_mode='py'`），重建 exe，**用真实服务器 8101 跑通并断言 perf 明细存在**（警惕 mock 假阳性）。
+2. 按 §6 姿势 A 重写 3P1D 内层脚本（MooncakeConnectorV1 + dp1/tp1 + 代理），跑通后用工具实测 pod 维度（per_pod 命中率表、多端口采集时序）。
+3. 可选：UWM/横向扩展、报告模板美化、README 更新 PD 章节。

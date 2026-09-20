@@ -14,6 +14,7 @@ const DEFAULT_CFG = {
   length_mean: null as number | null, length_std: null as number | null,
   length_min: null as number | null, length_max: null as number | null,
   tokenizer: "", vocab_file: null as string | null, dataset_mode: "text",
+  dataset_id: null as string | null,
   cache_reset: "each_round", per_round_seed_offset: false,
   api_key: "", summarizer: "default_perf",
   collection_interval: 5,
@@ -27,6 +28,8 @@ export default function ConfigPage() {
   const [rounds, setRounds] = useState<Record<string, any>[]>([{ test_name: "" }]);
   const [roundsMode, setRoundsMode] = useState<"table" | "json">("table");
   const [roundsJson, setRoundsJson] = useState("");
+  const [datasets, setDatasets] = useState<{ id: string; name: string; mode: string }[]>([]);
+  const [datasetId, setDatasetId] = useState("");
   const [check, setCheck] = useState<{ errors: string[]; warnings: string[] }>({ errors: [], warnings: [] });
   const [preview, setPreview] = useState<any>(null);
   const [probe, setProbe] = useState("");
@@ -37,6 +40,7 @@ export default function ConfigPage() {
       setTokenizers(t);
       setCfg((c) => ({ ...c, tokenizer: c.tokenizer || t[0]?.name || "" }));
     }).catch(() => {});
+    api.get<any[]>("/api/datasets").then(setDatasets).catch(() => {});
   }, []);
 
   const set = (patch: Partial<typeof cfg>) => setCfg((c) => ({ ...c, ...patch }));
@@ -145,6 +149,11 @@ export default function ConfigPage() {
               <input className="inp mono" value={cfg.npu_num} onChange={(e) => set({ npu_num: +e.target.value || 1 })} /></div>
           </div>
           <div className="row" style={{ marginBottom: 10 }}>
+            <div className="field"><label>完整 URL（可选，覆盖地址+端口，Docker 场景）</label>
+              <input className="inp mono" data-t="url" value={cfg.url}
+                onChange={(e) => set({ url: e.target.value })} placeholder="http://host:port" /></div>
+          </div>
+          <div className="row" style={{ marginBottom: 10 }}>
             <div className="field"><label>API Key（服务启用鉴权时必填）</label>
               <input className="inp mono" type="password" data-t="api_key" value={cfg.api_key}
                 onChange={(e) => set({ api_key: e.target.value })} placeholder="sk-…" /></div>
@@ -202,9 +211,24 @@ export default function ConfigPage() {
               <option value="text">gsm8k 文本（tokenizer 词表）</option>
               <option value="tokenid">tokenid 精确模式</option>
             </select>
+            <input className="inp mono" style={{ flex: 1, minWidth: 180 }} data-t="vocab_file"
+              placeholder="自定义词表文件 vocab.txt（可选，每行一个词）"
+              value={cfg.vocab_file ?? ""} onChange={(e) => set({ vocab_file: e.target.value || null })} />
             <span className="muted" style={{ fontSize: 11.5 }}>
               理论命中率 ≈ {(Number(parseFloat(String(cfg.repeat_rate)) || 0) * (1 - 3 / Math.max(1, cfg.input_len))).toFixed(3)}
             </span>
+          </div>
+          <div className="row" style={{ marginBottom: 10, alignItems: "center" }}>
+            <div style={{ fontSize: 12, color: "var(--text2)", width: 130 }}>复用已入库数据集</div>
+            <select className="sel" style={{ flex: 1, maxWidth: 320 }} value={datasetId}
+              onChange={(e) => {
+                setDatasetId(e.target.value);
+                set({ dataset_id: e.target.value || null });
+              }}>
+              <option value="">（不指定 — 按上方参数自动生成）</option>
+              {datasets.map((d) => <option key={d.id} value={d.id}>{d.name}（{d.mode}）</option>)}
+            </select>
+            {datasetId && <span className="tag blue">将跳过生成，直接复用</span>}
           </div>
           <button className="btn" onClick={doPreview} disabled={busy}>▦ 生成数据集预览</button>
           {preview && (

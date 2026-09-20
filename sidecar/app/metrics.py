@@ -127,22 +127,29 @@ def merge_pod_series(target: dict, parsed: dict[tuple, dict[str, float]]) -> Non
 
 
 def compute_hit_rate(before: dict, after: dict) -> dict:
-    """Δhits/Δqueries per engine (dp domain) and aggregated — ported口径."""
+    """Δhits/Δqueries per engine (dp domain) and aggregated — ported口径.
+    Keys may be (engine, worker) or (pod, engine, worker); the pod dimension is
+    additionally broken out per endpoint for PD/multi-port deployments."""
     per_dp: dict[str, dict] = {}
+    per_pod: dict[str, dict] = {}
     agg = {"hbm_q": 0, "hbm_h": 0, "ext_q": 0, "ext_h": 0}
 
     series_keys = set(after) | set(before)
     for series_key in series_keys:
         a = after.get(series_key, {})
         b = before.get(series_key, {})
-        engine = series_key[0]
+        pod, engine = (series_key[0], series_key[1])
         dp_key = f"dp{engine}"
         slot = per_dp.setdefault(
             dp_key, {"hbm_queries": 0, "hbm_hits": 0, "ext_queries": 0, "ext_hits": 0})
+        pod_slot = per_pod.setdefault(
+            f"{pod}|{dp_key}", {"hbm_queries": 0, "hbm_hits": 0,
+                                "ext_queries": 0, "ext_hits": 0})
         for dst, src in (("hbm_queries", "hbm_q"), ("hbm_hits", "hbm_h"),
                          ("ext_queries", "ext_q"), ("ext_hits", "ext_h")):
             delta = int(a.get(src, 0) - b.get(src, 0))
             slot[dst] += delta
+            pod_slot[dst] += delta
             agg[src] += delta
 
     for dp_key, dp_data in per_dp.items():
@@ -150,6 +157,11 @@ def compute_hit_rate(before: dict, after: dict) -> dict:
         ext_rate = dp_data["ext_hits"] / dp_data["ext_queries"] if dp_data["ext_queries"] > 0 else 0.0
         dp_data["hbm_hit_rate"] = round(hbm_rate, 6)
         dp_data["ext_hit_rate"] = round(ext_rate, 6)
+    for pod_key, pod_data in per_pod.items():
+        hbm_rate = pod_data["hbm_hits"] / pod_data["hbm_queries"] if pod_data["hbm_queries"] > 0 else 0.0
+        ext_rate = pod_data["ext_hits"] / pod_data["ext_queries"] if pod_data["ext_queries"] > 0 else 0.0
+        pod_data["hbm_hit_rate"] = round(hbm_rate, 6)
+        pod_data["ext_hit_rate"] = round(ext_rate, 6)
 
     aggregated = {
         "hbm_hit_rate": round(agg["hbm_h"] / agg["hbm_q"], 6) if agg["hbm_q"] > 0 else 0.0,
@@ -161,7 +173,7 @@ def compute_hit_rate(before: dict, after: dict) -> dict:
         aggregated["composite_hit_rate"] = round(
             aggregated["ext_hit_rate"] * (1 - aggregated["hbm_hit_rate"])
             + aggregated["hbm_hit_rate"], 6)
-    return {"per_dp": per_dp, "aggregated": aggregated}
+    return {"per_dp": per_dp, "per_pod": per_pod, "aggregated": aggregated}
 
 
 def flatten_snapshot(snapshot: dict[tuple, dict[str, float]]) -> dict[str, dict[str, float]]:
@@ -189,15 +201,21 @@ class Collector:
         self._lock = asyncio.Lock()
 
     async def _poll_once(self) -> bool:
+        any_ok = False
+        merged: dict[tuple, dict[str, float]] = {}
         async with httpx.AsyncClient(trust_env=False, timeout=3.0) as client:
             results = await asyncio.gather(*(fetch_metrics(client, p) for p in self.pods))
-        merged: dict[tuple, dict[str, float]] = {}
-        any_ok = False
-        for raw in results:
+        for pod, raw in zip(self.pods, results):
             if raw is None:
                 continue
             any_ok = True
-            merge_pod_series(merged, parse_metrics_text(raw))
+            parsed = parse_metrics_text(raw)
+            # pod dimension preserved: key = (pod, engine, worker)
+            for (engine, worker), counters in parsed.items():
+                key = (pod, engine, worker)
+                dst = merged.setdefault(key, {})
+                for k, v in counters.items():
+                    dst[k] = dst.get(k, 0) + v
         async with self._lock:
             if any_ok:
                 self.latest = merged
@@ -213,7 +231,7 @@ class Collector:
     def public_sample(self) -> dict:
         return {
             "ts": time.time(),
-            "engines": {f"{e}|{w}": c for (e, w), c in self.latest.items()},
+            "engines": {f"{p}|{e}|{w}": c for (p, e, w), c in self.latest.items()},
             "ucm_detected": self.ucm_detected,
             "pods_ok": True,
         }

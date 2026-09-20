@@ -17,7 +17,7 @@ export default function MonitorPage({ route }: { route: string }) {
   const [round, setRound] = useState(0);
   const [totalRounds, setTotalRounds] = useState(1);
   const [samples, setSamples] = useState<{ ts: number; flat: Record<string, number> }[]>([]);
-  const [phaseRate, setPhaseRate] = useState<{ per_dp: any; agg: any; phase: string } | null>(null);
+  const [phaseRate, setPhaseRate] = useState<{ per_dp: any; per_pod?: any; agg: any; phase: string } | null>(null);
   const [ucm, setUcm] = useState<boolean | null>(null);
   const [detail, setDetail] = useState<any>(null);
   const [filter, setFilter] = useState("all");
@@ -36,11 +36,18 @@ export default function MonitorPage({ route }: { route: string }) {
       if (lastFull) setPhaseRate({ per_dp: lastFull.hit_rate?.per_dp, agg: lastFull.hit_rate?.aggregated, phase: "full" });
       // completed runs: replay persisted timeseries so charts still render
       api.get<{ samples: any[] }>(`/api/runs/${runId}/metrics`).then((r) => {
-        const flatSamples = (r.samples ?? []).map((s) => ({
-          ts: s.ts,
-          flat: Object.values(s.engines ?? {}).reduce<Record<string, number>>(
-            (acc, counters: any) => ({ ...acc, ...counters }), {}),
-        }));
+        const gauges = new Set(["running", "waiting", "swapped", "kv_usage"]);
+        const flatSamples = (r.samples ?? []).map((s) => {
+          const engines: Record<string, Record<string, number>> = s.engines ?? {};
+          let flat: Record<string, number> = {};
+          for (const counters of Object.values(engines)) {
+            for (const [k, v] of Object.entries(counters)) {
+              const gauges = new Set(["running", "waiting", "swapped", "kv_usage"]);
+              flat[k] = gauges.has(k) ? Math.max(flat[k] ?? 0, Number(v)) : (flat[k] ?? 0) + Number(v);
+            }
+          }
+          return { ts: s.ts as number, flat };
+        });
         setSamples(flatSamples);
         if (flatSamples.length && flatSamples[0].flat._ucm_seen) setUcm(true);
       }).catch(() => {});
@@ -282,18 +289,27 @@ export default function MonitorPage({ route }: { route: string }) {
             <div className="card">
               <div className="chart-head"><b>DP 域明细</b><span className="tag gray" style={{ fontSize: 10 }}>阶段快照差分</span></div>
               <table className="mini-table">
-                <thead><tr><th>DP 域</th><th>HBM 命中率</th><th>hits / queries</th><th>Ext 命中率</th><th>hits / queries</th></tr></thead>
+                <thead><tr><th>端点 / DP 域</th><th>HBM 命中率</th><th>hits / queries</th><th>Ext 命中率</th><th>hits / queries</th></tr></thead>
                 <tbody>
-                  {Object.entries(phaseRate?.per_dp ?? {}).map(([dp, d]: [string, any]) => (
-                    <tr key={dp}>
-                      <td><b>{dp}</b></td>
+                  {Object.entries(phaseRate?.per_pod ?? {}).map(([key, d]: [string, any]) => (
+                    <tr key={key}>
+                      <td><b className="mono" style={{ fontSize: 11 }}>{key.replace("|", " · ")}</b></td>
                       <td><b style={{ color: HBM }}>{(d.hbm_hit_rate * 100).toFixed(1)}%</b></td>
                       <td className="mono">{d.hbm_hits.toLocaleString()} / {d.hbm_queries.toLocaleString()}</td>
                       <td><b style={{ color: EXT }}>{(d.ext_hit_rate * 100).toFixed(1)}%</b></td>
                       <td className="mono">{d.ext_hits.toLocaleString()} / {d.ext_queries.toLocaleString()}</td>
                     </tr>
                   ))}
-                  {!Object.keys(phaseRate?.per_dp ?? {}).length && (
+                  {!Object.keys(phaseRate?.per_pod ?? {}).length &&
+                    Object.entries(phaseRate?.per_dp ?? {}).map(([dp, d]: [string, any]) => (
+                      <tr key={dp}>
+                        <td><b>{dp}</b></td>
+                        <td><b style={{ color: HBM }}>{(d.hbm_hit_rate * 100).toFixed(1)}%</b></td>
+                        <td className="mono">{d.hbm_hits.toLocaleString()} / {d.hbm_queries.toLocaleString()}</td>
+                        <td><b style={{ color: EXT }}>{(d.ext_hit_rate * 100).toFixed(1)}%</b></td>
+                        <td className="mono">{d.ext_hits.toLocaleString()} / {d.ext_queries.toLocaleString()}</td>
+                      </tr>))}
+                  {!Object.keys(phaseRate?.per_pod ?? {}).length && !Object.keys(phaseRate?.per_dp ?? {}).length && (
                     <tr><td colSpan={5} className="muted">等待阶段完成…</td></tr>)}
                 </tbody>
               </table>
