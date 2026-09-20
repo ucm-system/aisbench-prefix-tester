@@ -1,0 +1,853 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AISBench 前缀复用测试器 — UI 设计原型</title>
+<style>
+:root{
+  --bg0:#050506; --bg1:#111214; --bg2:#1a1b1e; --bg3:#222327;
+  --border:rgba(255,255,255,.08); --border2:rgba(255,255,255,.14);
+  --text:#e9eaec; --text2:#a2a5ab; --muted:#6d7078;
+  --brand:#3b82f6; --brand-strong:#2b7fff;
+  --green:#10a37f; --warn:#e2a336; --danger:#e5484d;
+  --hbm:#4f8bff; --ext:#13c2c2; --ucm:#9254de; --miss:#5a5e66;
+  --radius:12px; --radius-s:8px;
+  --mono:"JetBrains Mono","Cascadia Code",Consolas,monospace;
+  --sans:Inter,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg0);color:var(--text);font-family:var(--sans);font-size:13px;display:flex;overflow:hidden}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:#2e3036;border-radius:4px}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ============ 侧栏 ============ */
+#sidebar{width:216px;min-width:216px;background:var(--bg1);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:14px 10px}
+.logo{display:flex;align-items:center;gap:10px;padding:4px 8px 14px}
+.logo-mark{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#2b7fff,#13c2c2);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;color:#fff}
+.logo b{font-size:13.5px;display:block}
+.logo span{font-size:10.5px;color:var(--muted)}
+.nav{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:var(--radius-s);color:var(--text2);cursor:pointer;user-select:none;font-size:13px;position:relative}
+.nav-item svg{width:16px;height:16px;flex:none}
+.nav-item:hover{background:var(--bg2);color:var(--text)}
+.nav-item.active{background:linear-gradient(90deg,rgba(59,130,246,.16),rgba(59,130,246,.05));color:#fff}
+.nav-item.active::before{content:"";position:absolute;left:-10px;top:8px;bottom:8px;width:3px;border-radius:2px;background:var(--brand)}
+.nav-badge{margin-left:auto;background:var(--brand);color:#fff;font-size:10px;border-radius:8px;padding:1px 6px;font-weight:600}
+.side-foot{margin-top:auto;padding:10px 8px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);line-height:1.8}
+.side-foot .ok{color:var(--green)}
+
+/* ============ 主区 ============ */
+#main{flex:1;display:flex;flex-direction:column;min-width:0}
+#topbar{height:52px;min-height:52px;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 20px;gap:14px;background:rgba(17,18,20,.7);backdrop-filter:blur(8px)}
+#topbar h1{font-size:15px;font-weight:600}
+.crumb{color:var(--muted);font-size:12px}
+.top-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:99px;padding:4px 10px;font-size:11.5px;color:var(--text2);background:var(--bg1)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 6px rgba(16,163,127,.8)}
+.icon-btn{width:30px;height:30px;border-radius:var(--radius-s);border:1px solid var(--border);background:var(--bg1);color:var(--text2);display:flex;align-items:center;justify-content:center;cursor:pointer}
+.icon-btn:hover{color:#fff;border-color:var(--border2)}
+#content{flex:1;overflow-y:auto;padding:20px 22px 32px}
+.page{display:none;max-width:1460px;margin:0 auto}
+.page.active{display:block;animation:fade .18s ease}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+/* ============ 通用组件 ============ */
+.card{background:var(--bg1);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
+.card h3{font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;margin-bottom:14px}
+.card h3 .idx{width:18px;height:18px;border-radius:6px;background:var(--bg3);color:var(--text2);font-size:11px;display:inline-flex;align-items:center;justify-content:center}
+.sec-tag{font-size:11px;color:var(--muted);font-weight:400;margin-left:auto}
+.row{display:flex;gap:12px;flex-wrap:wrap}
+.grid2{display:grid;grid-template-columns:1fr 340px;gap:16px;align-items:start}
+.btn{display:inline-flex;align-items:center;gap:7px;border-radius:var(--radius-s);border:1px solid var(--border2);background:var(--bg2);color:var(--text);padding:7px 14px;font-size:12.5px;cursor:pointer;font-family:var(--sans)}
+.btn:hover{border-color:#3a3d44;background:var(--bg3)}
+.btn.primary{background:var(--brand-strong);border-color:var(--brand-strong);color:#fff;font-weight:600}
+.btn.primary:hover{background:#4a8bff}
+.btn.ghost{background:transparent}
+.btn.danger{color:var(--danger);border-color:rgba(229,72,77,.4)}
+.btn.sm{padding:4px 10px;font-size:11.5px}
+.field{display:flex;flex-direction:column;gap:5px;min-width:120px;flex:1}
+.field label{font-size:11.5px;color:var(--text2)}
+.field label .req{color:var(--danger)}
+.inp,.sel{background:var(--bg0);border:1px solid var(--border2);border-radius:var(--radius-s);color:var(--text);padding:7px 10px;font-size:12.5px;font-family:var(--sans);width:100%;outline:none;font-variant-numeric:tabular-nums}
+.inp:focus,.sel:focus{border-color:var(--brand);box-shadow:0 0 0 2px rgba(59,130,246,.18)}
+.inp.mono{font-family:var(--mono);font-size:12px}
+.unit{position:relative}
+.unit .u{position:absolute;right:9px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:11px;pointer-events:none}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{color:var(--muted);text-align:left;font-weight:500;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:9px 10px;border-bottom:1px solid rgba(255,255,255,.05);font-variant-numeric:tabular-nums;white-space:nowrap}
+tr:hover td{background:rgba(255,255,255,.02)}
+.tag{display:inline-flex;align-items:center;gap:5px;border-radius:6px;padding:2px 8px;font-size:11px;border:1px solid var(--border);color:var(--text2)}
+.tag.blue{color:#8ab4ff;border-color:rgba(79,139,255,.35);background:rgba(79,139,255,.1)}
+.tag.cyan{color:#4ddbdb;border-color:rgba(19,194,194,.35);background:rgba(19,194,194,.08)}
+.tag.purple{color:#b89af1;border-color:rgba(146,84,222,.4);background:rgba(146,84,222,.1)}
+.tag.warn{color:#f0be63;border-color:rgba(226,163,54,.4);background:rgba(226,163,54,.08)}
+.tag.gray{color:var(--muted)}
+.muted{color:var(--muted)}
+.up{color:var(--green)} .down{color:var(--danger)}
+.switch{width:32px;height:18px;border-radius:99px;background:var(--bg3);border:1px solid var(--border2);position:relative;cursor:pointer;flex:none}
+.switch::after{content:"";position:absolute;width:12px;height:12px;border-radius:50%;background:#8a8d94;top:2px;left:2px;transition:.15s}
+.switch.on{background:rgba(59,130,246,.35);border-color:var(--brand)}
+.switch.on::after{left:16px;background:#fff}
+.seg{display:inline-flex;background:var(--bg0);border:1px solid var(--border);border-radius:var(--radius-s);padding:2px;gap:2px}
+.seg span{padding:4px 12px;border-radius:6px;color:var(--text2);cursor:pointer;font-size:12px}
+.seg span.on{background:var(--bg3);color:#fff}
+.alert{display:flex;gap:10px;align-items:flex-start;border-radius:var(--radius-s);padding:10px 12px;font-size:12px;line-height:1.6}
+.alert.warn{background:rgba(226,163,54,.08);border:1px solid rgba(226,163,54,.3);color:#f0c887}
+.alert.info{background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.3);color:#9ec1ff}
+.alert.error{background:rgba(229,72,77,.08);border:1px solid rgba(229,72,77,.35);color:#f3a1a4}
+.progress{height:5px;border-radius:3px;background:var(--bg3);overflow:hidden}
+.progress i{display:block;height:100%;background:var(--brand);border-radius:3px}
+
+/* ============ P1 配置页 ============ */
+.actionbar{position:sticky;bottom:-32px;margin:16px -22px -32px;padding:14px 22px;background:rgba(9,9,10,.92);backdrop-filter:blur(10px);border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end;align-items:center}
+.summary-card{position:sticky;top:0}
+.summary-rows{display:flex;flex-direction:column}
+.summary-rows .sr{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px dashed rgba(255,255,255,.06);font-size:12px}
+.summary-rows .sr b{font-variant-numeric:tabular-nums;font-weight:600}
+.endpoint-row{display:grid;grid-template-columns:1fr 70px 90px 70px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:12px}
+.endpoint-row .ip{font-family:var(--mono);font-size:12px}
+.reach{display:inline-flex;align-items:center;gap:5px;font-size:11px}
+.reach i{width:6px;height:6px;border-radius:50%;display:inline-block}
+.preview-sample{background:var(--bg0);border:1px solid var(--border);border-radius:var(--radius-s);padding:12px;font-family:var(--mono);font-size:11.5px;line-height:1.9;word-break:break-all}
+.seg-prefix{background:rgba(79,139,255,.16);color:#9dc0ff;border-radius:3px;padding:1px 0}
+.seg-sep{background:rgba(255,255,255,.07);color:var(--muted);border-radius:3px;padding:1px 3px}
+.seg-suffix{background:rgba(249,115,22,.14);color:#fdba74;border-radius:3px;padding:1px 0}
+.hist{display:flex;align-items:flex-end;gap:2px;height:56px;padding-top:4px}
+.hist i{flex:1;background:linear-gradient(180deg,#4f8bff,#2b5fd0);border-radius:2px 2px 0 0;min-height:2px;opacity:.85}
+
+/* ============ P2 监控页 ============ */
+.run-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+.run-head h2{font-size:16px;font-weight:600}
+.pulse{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 1.6s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(16,163,127,.5)}70%{box-shadow:0 0 0 7px rgba(16,163,127,0)}100%{box-shadow:0 0 0 0 rgba(16,163,127,0)}}
+.phases{display:flex;align-items:center;gap:0;margin:2px 0 16px;flex-wrap:wrap}
+.phase{display:flex;align-items:center;gap:8px;padding:7px 14px;border:1px solid var(--border);background:var(--bg1);font-size:12px;color:var(--text2)}
+.phase:first-child{border-radius:var(--radius-s) 0 0 var(--radius-s)}
+.phase:last-child{border-radius:0 var(--radius-s) var(--radius-s) 0}
+.phase.done{color:var(--green);border-color:rgba(16,163,127,.35);background:rgba(16,163,127,.06)}
+.phase.running{color:#fff;border-color:rgba(59,130,246,.5);background:rgba(59,130,246,.12)}
+.phase-arrow{width:18px;height:1px;background:var(--border2)}
+.metric-cards{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:14px}
+.mcard{background:var(--bg1);border:1px solid var(--border);border-radius:var(--radius);padding:13px 15px;position:relative;overflow:hidden}
+.mcard .t{font-size:11.5px;color:var(--text2);display:flex;align-items:center;gap:6px}
+.mcard .v{font-size:27px;font-weight:700;margin-top:5px;font-variant-numeric:tabular-nums;letter-spacing:-.5px}
+.mcard .s{font-size:11px;color:var(--muted);margin-top:3px}
+.mcard .bar{position:absolute;left:0;bottom:0;height:3px;width:100%}
+.monitor-grid{display:grid;grid-template-columns:1.55fr 1fr;gap:12px;margin-bottom:12px}
+.monitor-grid2{display:grid;grid-template-columns:1.55fr 1fr;gap:12px}
+.chart-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.chart-head b{font-size:12.5px}
+.legend{display:flex;gap:12px;margin-left:auto;font-size:11px;color:var(--text2);flex-wrap:wrap}
+.legend i{width:9px;height:3px;border-radius:2px;display:inline-block;margin-right:5px;vertical-align:middle}
+.legend .dashed i{background:repeating-linear-gradient(90deg,currentColor 0 3px,transparent 3px 6px)}
+.logview{background:#0a0b0d;border:1px solid var(--border);border-radius:var(--radius-s);font-family:var(--mono);font-size:11.5px;line-height:1.85;height:238px;overflow-y:auto;padding:10px 12px}
+.logview .ln{white-space:pre-wrap;word-break:break-all;color:#b8bcc4}
+.logview .ts{color:#565b64}
+.logview .warn{color:#f0be63}
+.logview .err{color:#f3a1a4}
+.logview .hl{color:#7fb0ff}
+.mini-table td,.mini-table th{padding:7px 10px}
+
+/* ============ P3 记录页 ============ */
+.toolbar{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+.status-p{display:inline-flex;align-items:center;gap:6px;font-size:11.5px}
+.status-p i{width:7px;height:7px;border-radius:50%}
+#drawer{position:fixed;top:0;right:-740px;width:720px;height:100vh;background:var(--bg1);border-left:1px solid var(--border2);z-index:50;transition:right .22s ease;display:flex;flex-direction:column;box-shadow:-24px 0 60px rgba(0,0,0,.5)}
+#drawer.open{right:0}
+.drawer-head{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+.drawer-body{padding:18px 20px;overflow-y:auto;flex:1}
+.drawer-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:40;display:none}
+.drawer-mask.show{display:block}
+
+/* ============ P4 对比页 ============ */
+.compare-grid{display:grid;grid-template-columns:250px 1fr;gap:16px;align-items:start}
+.delta-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:12px}
+.dcard{background:var(--bg1);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px}
+.dcard .t{font-size:11.5px;color:var(--text2)}
+.dcard .v{font-size:20px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
+.dcard .d{font-size:11.5px;margin-top:3px;font-weight:600}
+.check-run{display:flex;align-items:flex-start;gap:9px;padding:9px 10px;border-radius:var(--radius-s);cursor:pointer;border:1px solid transparent}
+.check-run:hover{background:var(--bg2)}
+.check-run.sel{border-color:rgba(59,130,246,.4);background:rgba(59,130,246,.07)}
+.checkbox{width:15px;height:15px;border-radius:4px;border:1.5px solid var(--border2);flex:none;margin-top:1px;display:flex;align-items:center;justify-content:center}
+.checkbox.on{background:var(--brand);border-color:var(--brand)}
+.checkbox.on::after{content:"✓";font-size:10px;color:#fff;font-weight:700}
+.diff-key{color:#f0be63;font-family:var(--mono);font-size:11.5px}
+
+/* ============ P5 数据集页 / P6 设置页 ============ */
+.ds-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.ds-grid .card{display:flex;flex-direction:column}
+.ds-grid .card>.row{margin-top:auto}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:18px}
+.tabs span{padding:9px 16px;color:var(--text2);cursor:pointer;font-size:13px;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs span.on{color:#fff;border-color:var(--brand)}
+.diag-item{display:flex;align-items:flex-start;gap:11px;padding:11px 4px;border-bottom:1px solid rgba(255,255,255,.05)}
+.diag-item .ic{width:20px;height:20px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:11px;margin-top:1px}
+.diag-item .ic.ok{background:rgba(16,163,127,.15);color:var(--green)}
+.diag-item .ic.bad{background:rgba(229,72,77,.15);color:var(--danger)}
+.diag-item b{font-size:12.5px;display:block}
+.diag-item p{font-size:11.5px;color:var(--muted);margin-top:2px;line-height:1.55}
+usage-bar{display:block}
+.kv{display:flex;justify-content:space-between;font-size:12px;padding:7px 0;border-bottom:1px dashed rgba(255,255,255,.06)}
+.subnote{font-size:11.5px;color:var(--muted);line-height:1.6}
+@media (max-width:1180px){.grid2,.monitor-grid,.monitor-grid2,.compare-grid{grid-template-columns:1fr}.metric-cards{grid-template-columns:repeat(3,1fr)}.delta-cards{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+
+<!-- ================= 侧栏 ================= -->
+<aside id="sidebar">
+  <div class="logo">
+    <div class="logo-mark">PC</div>
+    <div><b>前缀复用测试器</b><span>AISBench Prefix Tester</span></div>
+  </div>
+  <nav class="nav" id="nav">
+    <div class="nav-item" data-page="config"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>新建测试</div>
+    <div class="nav-item active" data-page="monitor"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>运行监控<span class="nav-badge">1</span></div>
+    <div class="nav-item" data-page="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-7.6 4.2M3 3v5h5"/></svg>运行记录</div>
+    <div class="nav-item" data-page="compare"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3M12 1v22"/></svg>对比分析</div>
+    <div class="nav-item" data-page="datasets"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></svg>数据集</div>
+    <div class="nav-item" data-page="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5h.1a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>设置</div>
+  </nav>
+  <div class="side-foot">
+    Sidecar <span class="ok">● 就绪 (127.0.0.1:52118)</span><br>
+    AISBench <span class="ok">v3.1.20260630</span><br>
+    原型 v1.0 · 仅供设计评审
+  </div>
+</aside>
+
+<!-- ================= 主区 ================= -->
+<div id="main">
+  <header id="topbar">
+    <h1 id="page-title">运行监控</h1>
+    <span class="crumb" id="page-crumb">实时指标 · 日志流 · 阶段进度</span>
+    <div class="top-right">
+      <span class="chip"><span class="dot"></span>Sidecar 就绪</span>
+      <span class="chip">UCM <span class="tag purple" style="padding:1px 7px">已检测</span></span>
+      <div class="icon-btn" title="主题">◐</div>
+      <div class="icon-btn" title="设置" onclick="go('settings')">⚙</div>
+    </div>
+  </header>
+
+  <div id="content">
+
+  <!-- ============ P1 新建测试 ============ -->
+  <section class="page" id="page-config">
+    <div class="grid2">
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div class="row" style="align-items:center">
+          <div style="font-size:12.5px;color:var(--text2)">预设：</div>
+          <select class="sel" style="width:230px"><option>DeepSeek-A2 · 90%重复 · 32768</option><option>vLLM 基线（无前缀）</option><option>PD 分离 · 双实例</option></select>
+          <button class="btn sm ghost">另存为预设</button>
+          <button class="btn sm ghost">管理…</button>
+        </div>
+
+        <div class="card">
+          <h3><span class="idx">1</span>服务连接 <span class="sec-tag">目标推理服务（vLLM / UCM）</span></h3>
+          <div class="row" style="margin-bottom:10px">
+            <div class="field" style="flex:1.4"><label>服务地址 <span class="req">*</span></label><input class="inp mono" value="192.168.1.10"></div>
+            <div class="field" style="max-width:110px"><label>端口 <span class="req">*</span></label><input class="inp mono" value="8000"></div>
+            <div class="field" style="max-width:190px"><label>&nbsp;</label><button class="btn" style="width:100%">⊙ 探测服务</button></div>
+          </div>
+          <div class="row" style="margin-bottom:10px">
+            <div class="field"><label>模型名称（留空自动探测）</label><input class="inp" value="deepseek-ai/DeepSeek-V3.2"></div>
+            <div class="field" style="max-width:110px"><label>NPU 数</label><input class="inp mono" value="1"></div>
+          </div>
+          <div class="row">
+            <div class="field" style="flex:2.2"><label>模型目录（tokenizer 来源）<span class="req">*</span></label><input class="inp mono" value="D:\models\DeepSeek-V3.2" readonly></div>
+            <div class="field" style="max-width:90px"><label>&nbsp;</label><button class="btn" style="width:100%">浏览…</button></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3><span class="idx">2</span>前缀与数据集 <span class="sec-tag">随机词表 · GSM8K 兼容 JSONL</span></h3>
+          <div class="row" style="margin-bottom:10px">
+            <div class="field"><label>输入长度 input_len <span class="req">*</span></label><div class="unit"><input class="inp mono" value="32768"><span class="u">tok</span></div></div>
+            <div class="field"><label>输出长度 output_len <span class="req">*</span></label><div class="unit"><input class="inp mono" value="512"><span class="u">tok</span></div></div>
+            <div class="field"><label>数据条数 data_num</label><input class="inp mono" value="160"></div>
+            <div class="field"><label>前缀种类 prefix_num</label><input class="inp mono" value="160"></div>
+          </div>
+          <div class="row" style="margin-bottom:10px">
+            <div class="field" style="max-width:150px"><label>重复率 repeat_rate</label><div class="unit"><input class="inp mono" value="90"><span class="u">%</span></div></div>
+            <div class="field" style="max-width:110px"><label>数据并行 dp</label><input class="inp mono" value="1"></div>
+            <div class="field" style="max-width:110px"><label>随机种子 seed</label><input class="inp mono" value="42"></div>
+            <div class="field" style="max-width:170px"><label>变长分布（可选）</label><select class="sel"><option>固定长度</option><option>高斯 mean±std</option><option>均匀 min–max</option></select></div>
+          </div>
+          <div class="row" style="align-items:center;margin-bottom:12px">
+            <div style="font-size:12px;color:var(--text2);width:70px">词表来源</div>
+            <div class="seg"><span class="on">预置 tokenizer</span><span>自定义目录</span><span>词表文件</span><span>tokenid 模式</span></div>
+            <select class="sel" style="width:190px"><option>DeepSeek-V3.2（预置）</option><option>Qwen3-32B（预置）</option><option>GLM-4.6（预置）</option></select>
+          </div>
+          <div class="alert info" style="margin-bottom:12px">
+            <span>ℹ</span>
+            <div>seed=42 · 160 个独立前缀，每个前缀注入后供 <b>1 条/前缀</b> 样本复用；理论 HBM 命中率 ≈ <b>89.9%</b>（90% × (1 − 3/32768)）。建议先执行预埋阶段再全量压测（默认开启）。</div>
+          </div>
+          <button class="btn" onclick="toast('已生成数据集预览：160 行 · 实测均值 32,768 tok')">▦ 生成数据集预览</button>
+          <div style="margin-top:12px">
+            <div class="chart-head"><b>样本预览</b><span class="muted" style="font-size:11px">#17 / 160 · 实测 32,768 tok</span>
+              <div class="legend"><span><i style="background:#4f8bff"></i>前缀 29,491</span><span><i style="background:#5a5e66"></i>分隔 3</span><span><i style="background:#f97316"></i>后缀 3,274</span></div>
+            </div>
+            <div class="preview-sample"><span class="seg-prefix">␂ The rapid development of artificial intelligence infrastructure requires careful capacity planning across heterogeneous memory tiers. Modern inference engines rely on prefix caching to amortize the cost of long shared contexts…</span> <span class="seg-sep">↦↦↦</span> <span class="seg-suffix">quartz lattice maintained under vibration isolate drifting semiconductor cycle budget…</span></div>
+            <div style="margin-top:10px" class="row">
+              <div style="flex:1.4"><div class="subnote" style="margin-bottom:5px">实测 token 长度分布（抽样 40 条）— 峰值 32,768 ±0.4%</div><div class="hist" id="hist"></div></div>
+              <div style="flex:1"><div class="kv"><span>行数</span><b>160</b></div><div class="kv"><span>文件大小</span><b>21.4 MB</b></div><div class="kv"><span>格式</span><b>GSM8K JSONL ✓</b></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3><span class="idx">3</span>并发与调度 <span class="sec-tag">全量阶段 · 预埋阶段并发 = dp</span></h3>
+          <div class="row" style="margin-bottom:10px">
+            <div class="field"><label>最大并发 max_concurrency <span class="req">*</span></label><input class="inp mono" value="40"></div>
+            <div class="field"><label>请求频率 request_rate</label><div class="unit"><input class="inp mono" value="0"><span class="u">0=burst</span></div></div>
+            <div class="field" style="max-width:150px"><label>API 类型 test_type</label><select class="sel"><option>stream</option><option>text</option></select></div>
+            <div class="field" style="max-width:150px"><label>思考模式</label><div style="display:flex;align-items:center;gap:9px;padding-top:6px"><div class="switch"></div><span class="muted" style="font-size:12px">enable_think</span></div></div>
+          </div>
+          <div class="subnote">预埋阶段并发固定为 dp（=1），output_len=1；温度固定 0，ignore_eos=true。并发上限超过服务 max_num_seqs 时将给出警告。</div>
+        </div>
+
+        <div class="card">
+          <h3><span class="idx">4</span>采集端点（Prometheus /metrics） <span class="sec-tag">PD 分离可分组录入</span></h3>
+          <div style="display:flex;gap:8px;margin-bottom:10px">
+            <button class="btn sm">+ P 节点组</button><button class="btn sm">+ D 节点组</button>
+            <button class="btn sm ghost">批量粘贴…</button>
+            <span class="muted" style="font-size:11.5px;align-self:center">支持 IPv4 · [IPv6]:port · 裸 IPv6</span>
+          </div>
+          <div class="endpoint-row" style="color:var(--muted);border-bottom:1px solid var(--border)"><span>端点</span><span>角色</span><span>可达性</span><span>UCM</span></div>
+          <div class="endpoint-row"><span class="ip">10.0.0.1:8000</span><span><span class="tag blue">P · dp0</span></span><span class="reach"><i style="background:var(--green)"></i>200 · 12ms</span><span class="tag purple" style="padding:1px 7px">ucm:</span></div>
+          <div class="endpoint-row"><span class="ip">10.0.0.2:8000</span><span><span class="tag blue">P · dp1</span></span><span class="reach"><i style="background:var(--green)"></i>200 · 11ms</span><span class="tag purple" style="padding:1px 7px">ucm:</span></div>
+          <div class="endpoint-row"><span class="ip">10.0.0.3:8001</span><span><span class="tag cyan">D · dp0</span></span><span class="reach"><i style="background:var(--green)"></i>200 · 9ms</span><span class="tag purple" style="padding:1px 7px">ucm:</span></div>
+          <div class="endpoint-row" style="border:none"><span class="ip">10.0.0.4:8001</span><span><span class="tag cyan">D · dp1</span></span><span class="reach"><i style="background:var(--warn)"></i>超时 3s</span><span class="muted">—</span></div>
+        </div>
+
+        <div class="card">
+          <h3><span class="idx">5</span>多轮计划 <span class="sec-tag">仅 10 个参数可按轮覆盖，其余全局共享</span></h3>
+          <table>
+            <thead><tr><th style="width:46px">#</th><th>轮次名称</th><th>concurrency</th><th>repeat_rate</th><th>prefix_num</th><th>dp</th><th>seed</th><th>预埋轮</th><th></th></tr></thead>
+            <tbody>
+              <tr><td>1</td><td>基线 · 无外部缓存</td><td class="mono">40</td><td class="mono">90%</td><td class="mono">160</td><td class="mono">1</td><td class="mono">42</td><td>—</td><td><button class="btn sm ghost">✕</button></td></tr>
+              <tr><td>2</td><td>UCM POSIX 开启</td><td class="mono">40</td><td class="mono">90%</td><td class="mono">160</td><td class="mono">1</td><td class="mono">42</td><td>—</td><td><button class="btn sm ghost">✕</button></td></tr>
+              <tr style="color:var(--muted)"><td>—</td><td colspan="7" style="color:var(--muted);font-size:11.5px">＋ 添加轮次（可覆盖：input_len / output_len / data_num / concurrency / request_rate / prefix_num / repeat_rate / dp / seed / test_name）</td><td><button class="btn sm">＋</button></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 右栏摘要 -->
+      <div class="card summary-card">
+        <h3>摘要与体检</h3>
+        <div class="summary-rows">
+          <div class="sr"><span class="muted">目标服务</span><b class="mono" style="font-size:12px">192.168.1.10:8000</b></div>
+          <div class="sr"><span class="muted">模型</span><b style="font-size:12px">DeepSeek-V3.2</b></div>
+          <div class="sr"><span class="muted">输入 / 输出</span><b>32,768 / 512 tok</b></div>
+          <div class="sr"><span class="muted">数据量</span><b>160 条 × 前缀 160</b></div>
+          <div class="sr"><span class="muted">重复率</span><b>90%</b></div>
+          <div class="sr"><span class="muted">并发（全量 / 预埋）</span><b>40 / 1</b></div>
+          <div class="sr"><span class="muted">DP 域</span><b>2（engine 0–1）</b></div>
+          <div class="sr"><span class="muted">采集端点</span><b>4 个 · 5s 轮询</b></div>
+          <div class="sr"><span class="muted">多轮计划</span><b>2 轮</b></div>
+          <div class="sr" style="border:none"><span class="muted">预计时长</span><b>≈ 12 min / 轮</b></div>
+        </div>
+        <div class="alert warn" style="margin-top:14px">
+          <span>⚠</span>
+          <div><b>体检提醒</b><br>端点 10.0.0.4:8001 探测超时，该 DP 域指标将缺失，是否继续？</div>
+        </div>
+        <div class="subnote" style="margin-top:14px">提交后将生成唯一 run_id，日志与指标落盘至<br><span class="mono" style="font-size:10.5px">%APPDATA%/AISBenchPrefixTester/outputs/</span></div>
+      </div>
+    </div>
+
+    <div class="actionbar">
+      <button class="btn ghost">重置</button>
+      <button class="btn">保存为预设</button>
+      <button class="btn primary" onclick="go('monitor')">▶ 开始测试</button>
+    </div>
+  </section>
+
+  <!-- ============ P2 运行监控 ============ -->
+  <section class="page active" id="page-monitor">
+    <div class="run-head">
+      <span class="pulse"></span>
+      <h2>run_20260920_114530</h2>
+      <span class="tag blue">DeepSeek-V3.2</span>
+      <span class="tag">第 1 / 2 轮</span>
+      <span class="tag gray">已运行 13:24</span>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn sm">暂停跟随</button>
+        <button class="btn sm danger">■ 停止测试</button>
+      </div>
+    </div>
+
+    <div class="phases">
+      <div class="phase done">✓ 预埋 warmup · dp×160 前缀注入 · 00:42</div>
+      <div class="phase-arrow"></div>
+      <div class="phase running">● 全量 full · 并发 40 · 运行中 12:32</div>
+      <div class="phase-arrow"></div>
+      <div class="phase">第 2 轮 · UCM POSIX</div>
+    </div>
+
+    <div class="metric-cards">
+      <div class="mcard"><div class="t"><i style="width:8px;height:8px;border-radius:2px;background:var(--hbm)"></i>HBM 命中率</div><div class="v">92.3<span style="font-size:15px;color:var(--text2)">%</span></div><div class="s">阶段快照差分 ↑ 稳定</div><div class="bar" style="background:var(--hbm);width:92%"></div></div>
+      <div class="mcard"><div class="t"><i style="width:8px;height:8px;border-radius:2px;background:var(--ext)"></i>Ext 命中率</div><div class="v">87.1<span style="font-size:15px;color:var(--text2)">%</span></div><div class="s">external prefix cache</div><div class="bar" style="background:var(--ext);width:87%"></div></div>
+      <div class="mcard"><div class="t"><i style="width:8px;height:8px;border-radius:2px;background:var(--ucm)"></i>综合命中率</div><div class="v">99.0<span style="font-size:15px;color:var(--text2)">%</span></div><div class="s">ext×(1−hbm)+hbm</div><div class="bar" style="background:var(--ucm);width:99%"></div></div>
+      <div class="mcard"><div class="t">已完成请求</div><div class="v">128<span style="font-size:15px;color:var(--text2)">/160</span></div><div class="s">running 40 · waiting 0</div><div class="bar" style="background:var(--brand);width:80%"></div></div>
+      <div class="mcard"><div class="t">avg TTFT</div><div class="v">412<span style="font-size:15px;color:var(--text2)">ms</span></div><div class="s">P90 1,208ms · 吞吐 3,214 tok/s</div><div class="bar" style="background:var(--green);width:64%"></div></div>
+    </div>
+
+    <div class="monitor-grid">
+      <div class="card">
+        <div class="chart-head"><b>命中率趋势</b><span class="tag gray" style="font-size:10px">实时 · 滑动窗 60s</span>
+          <div class="legend">
+            <span><i style="background:var(--hbm)"></i>HBM</span>
+            <span><i style="background:var(--ext)"></i>External</span>
+            <span class="dashed" style="color:#b89af1"><i></i>综合</span>
+          </div>
+        </div>
+        <div id="hit-chart"></div>
+      </div>
+      <div class="card">
+        <div class="chart-head"><b>请求状态 / KV 占用</b>
+          <div class="legend"><span><i style="background:#8ab4ff"></i>running</span><span><i style="background:#f0be63"></i>waiting</span><span><i style="background:#13c2c2"></i>KV %</span></div>
+        </div>
+        <div id="req-chart"></div>
+      </div>
+    </div>
+
+    <div class="monitor-grid2">
+      <div class="card">
+        <div class="chart-head">
+          <div class="seg"><span class="on">stdout</span><span>stderr</span></div>
+          <div class="seg"><span class="on">全部</span><span>WARN</span><span>ERROR</span></div>
+          <input class="inp" placeholder="搜索日志…" style="max-width:180px;margin-left:auto;padding:4px 9px;font-size:11.5px">
+          <button class="btn sm ghost">导出</button>
+        </div>
+        <div class="logview" id="logs">
+          <div class="ln"><span class="ts">12:31:58.412</span>  [Round 1/2] Phase 2: full benchmark starting, concurrency=40</div>
+          <div class="ln"><span class="ts">12:31:58.530</span>  dataset → GSM8K-in32768-num160-…-repeatRate0.9.jsonl (160 rows)</div>
+          <div class="ln"><span class="ts">12:31:59.117</span>  <span class="hl">POST http://192.168.1.10:8000/v1/chat/completions</span> stream=true, ignore_eos=true</div>
+          <div class="ln"><span class="ts">12:32:04.988</span>  progress: 12/160 requests completed, running=40 waiting=0</div>
+          <div class="ln"><span class="ts">12:32:09.990</span>  metrics: hbm_rate=89.2% ext_rate=84.6% kv_usage=71% <span class="hl">ucm: tokens hbm=96821 ucm=9011</span></div>
+          <div class="ln warn"><span class="ts">12:33:41.220</span>  WARN  retry=1 request timeout on 1 connection (dp1), retrying…</div>
+          <div class="ln"><span class="ts">12:34:12.884</span>  progress: 87/160 requests completed, avg_ttft=418ms p90=1204ms</div>
+          <div class="ln"><span class="ts">12:35:02.101</span>  metrics: hbm_rate=91.8% ext_rate=86.9% kv_usage=74%</div>
+          <div class="ln"><span class="ts">12:36:44.315</span>  progress: 128/160 requests completed</div>
+          <div class="ln err"><span class="ts">12:36:50.009</span>  ERROR pod 10.0.0.4:8001 /metrics fetch timeout (3s) — skipped this cycle</div>
+          <div class="ln"><span class="ts">12:38:02.556</span>  progress: 151/160 requests completed, throughput=3,214 tok/s</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:9px;font-size:11.5px;color:var(--muted)">
+          <div class="switch on"></div>跟随滚动 <span style="margin-left:auto">日志延迟 0.8s · 已缓冲 4,832 行</span>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="card">
+          <div class="chart-head"><b>Token 流向（UCM）</b><span class="tag purple" style="font-size:10px">ucm: 已检测</span></div>
+          <div style="display:flex;align-items:center;gap:16px">
+            <div id="donut" style="width:132px;height:132px;flex:none"></div>
+            <div style="flex:1">
+              <div class="kv"><span><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--hbm);margin-right:7px"></i>HBM 命中</span><b>85.7%</b></div>
+              <div class="kv"><span><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--ucm);margin-right:7px"></i>UCM 命中</span><b>8.9%</b></div>
+              <div class="kv"><span><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--miss);margin-right:7px"></i>Miss</span><b>5.4%</b></div>
+            </div>
+          </div>
+        </div>
+        <div class="card" style="flex:1">
+          <div class="chart-head"><b>分层命中拆解</b><span class="muted" style="font-size:10.5px">外部命中率按层加权</span></div>
+          <div id="layers" style="display:flex;flex-direction:column;gap:10px"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="chart-head"><b>DP 域明细</b><span class="tag gray" style="font-size:10px">阶段快照差分</span>
+        <div class="legend"><span>engine label → DP 域</span></div>
+      </div>
+      <table class="mini-table">
+        <thead><tr><th>DP 域</th><th>端点</th><th>HBM 命中率</th><th>HBM hits / queries</th><th>Ext 命中率</th><th>Ext hits / queries</th><th>UCM token 命中</th></tr></thead>
+        <tbody>
+          <tr><td><b>dp0</b></td><td class="mono">10.0.0.1:8000</td><td><b style="color:var(--hbm)">92.9%</b></td><td class="mono">2,402,331 / 2,586,590</td><td><b style="color:var(--ext)">87.6%</b></td><td class="mono">79,913 / 91,227</td><td>9.2%</td></tr>
+          <tr><td><b>dp1</b></td><td class="mono">10.0.0.2:8000</td><td><b style="color:var(--hbm)">91.7%</b></td><td class="mono">2,308,066 / 2,517,002</td><td><b style="color:var(--ext)">86.6%</b></td><td class="mono">77,415 / 89,394</td><td>8.6%</td></tr>
+          <tr style="color:var(--text2)"><td><b>合计</b></td><td class="mono">2 pods</td><td><b>92.3%</b></td><td class="mono">4,710,397 / 5,103,592</td><td><b>87.1%</b></td><td class="mono">157,328 / 180,621</td><td>8.9%</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ P3 运行记录 ============ -->
+  <section class="page" id="page-history">
+    <div class="toolbar">
+      <div class="seg"><span class="on">全部</span><span>已完成</span><span>运行中</span><span>失败</span></div>
+      <select class="sel" style="width:170px"><option>全部模型</option><option>DeepSeek-V3.2</option><option>Qwen3-32B</option></select>
+      <input class="inp" placeholder="搜索 run_id / 名称 / 备注…" style="max-width:250px">
+      <span style="margin-left:auto" class="muted">共 12 条记录 · 占用 1.8 GB</span>
+    </div>
+    <div class="card" style="padding:6px 4px">
+      <table>
+        <thead><tr><th style="width:34px"></th><th>名称 / run_id</th><th>时间</th><th>轮次</th><th>HBM</th><th>Ext</th><th>TTFT avg</th><th>吞吐</th><th>备注</th><th style="width:130px"></th></tr></thead>
+        <tbody id="history-body">
+          <tr onclick="openDrawer()" style="cursor:pointer">
+            <td><span class="status-p"><i style="background:var(--green)"></i></span></td>
+            <td><b>90%重复 · UCM POSIX</b><br><span class="muted mono" style="font-size:11px">run_20260920_114530</span></td>
+            <td>09-20 11:45<br><span class="muted" style="font-size:11px">26 min</span></td>
+            <td>2 轮 · <span class="muted">进行至 R1</span></td>
+            <td><b>92.3%</b></td><td><b style="color:var(--ext)">87.1%</b></td><td>412ms</td><td>3,214 tok/s</td><td class="muted">dp=2 首测</td>
+            <td><button class="btn sm">详情</button><button class="btn sm ghost">⋯</button></td>
+          </tr>
+          <tr onclick="openDrawer()" style="cursor:pointer">
+            <td><span class="status-p"><i style="background:var(--green)"></i></span></td>
+            <td><b>90%重复 · 纯 HBM 基线</b><br><span class="muted mono" style="font-size:11px">run_20260919_171002</span></td>
+            <td>09-19 17:10<br><span class="muted" style="font-size:11px">23 min</span></td>
+            <td>2 轮 · 完成</td>
+            <td><b>90.2%</b></td><td><b class="muted">—</b></td><td>449ms</td><td>3,022 tok/s</td><td class="tag warn" style="padding:1px 7px">练习轮</td>
+            <td><button class="btn sm">详情</button><button class="btn sm ghost">⋯</button></td>
+          </tr>
+          <tr onclick="openDrawer()" style="cursor:pointer">
+            <td><span class="status-p"><i style="background:var(--green)"></i></span></td>
+            <td><b>50%重复 · 长度抖动 G</b><br><span class="muted mono" style="font-size:11px">run_20260918_090331</span></td>
+            <td>09-18 09:03<br><span class="muted" style="font-size:11px">41 min</span></td>
+            <td>3 轮 · 完成</td>
+            <td><b>48.7%</b></td><td><b style="color:var(--ext)">41.2%</b></td><td>517ms</td><td>2,730 tok/s</td><td class="muted">G32768±49152</td>
+            <td><button class="btn sm">详情</button><button class="btn sm ghost">⋯</button></td>
+          </tr>
+          <tr onclick="openDrawer()" style="cursor:pointer">
+            <td><span class="status-p"><i style="background:var(--danger)"></i></span></td>
+            <td><b>PD 分离 · dp2</b><br><span class="muted mono" style="font-size:11px">run_20260917_154412</span></td>
+            <td>09-17 15:44<br><span class="muted" style="font-size:11px">7 min</span></td>
+            <td>2 轮 · R2 失败</td>
+            <td><b>91.4%</b></td><td><b style="color:var(--ext)">—</b></td><td>405ms</td><td>3,190 tok/s</td><td class="muted">连接中断</td>
+            <td><button class="btn sm">详情</button><button class="btn sm ghost">⋯</button></td>
+          </tr>
+          <tr onclick="openDrawer()" style="cursor:pointer">
+            <td><span class="status-p"><i style="background:var(--muted)"></i></span></td>
+            <td><b>冒烟 · 512 tok</b><br><span class="muted mono" style="font-size:11px">run_20260916_100211</span></td>
+            <td>09-16 10:02<br><span class="muted" style="font-size:11px">3 min</span></td>
+            <td>1 轮 · 手动停止</td>
+            <td><b>88.9%</b></td><td><b class="muted">—</b></td><td>388ms</td><td>2,950 tok/s</td><td class="tag warn" style="padding:1px 7px">练习轮</td>
+            <td><button class="btn sm">详情</button><button class="btn sm ghost">⋯</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ P4 对比分析 ============ -->
+  <section class="page" id="page-compare">
+    <div class="compare-grid">
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="card">
+          <h3>选择运行 <span class="sec-tag">已选 2</span></h3>
+          <div class="check-run sel"><div class="checkbox on"></div><div><b style="font-size:12.5px">90% · UCM POSIX</b><div class="muted" style="font-size:11px">09-20 · dp2 · 2 轮</div></div></div>
+          <div class="check-run sel"><div class="checkbox on"></div><div><b style="font-size:12.5px">90% · 纯 HBM 基线</b><div class="muted" style="font-size:11px">09-19 · dp1 · 2 轮</div></div></div>
+          <div class="check-run"><div class="checkbox"></div><div><b style="font-size:12.5px">50% · 长度抖动</b><div class="muted" style="font-size:11px">09-18 · dp1 · 3 轮</div></div></div>
+          <div style="border-top:1px solid var(--border);margin:10px 0"></div>
+          <div style="display:flex;align-items:center;gap:9px;padding:4px 8px"><div class="switch on"></div><span style="font-size:12px">排除预埋（warmup 阶段）</span></div>
+          <div style="display:flex;align-items:center;gap:9px;padding:4px 8px"><div class="switch on"></div><span style="font-size:12px">排除练习轮</span></div>
+          <div class="subnote" style="padding:6px 8px">run_20260919_171002 被标记为练习轮，已在对比中排除。可点击 run 详情修改标记。</div>
+        </div>
+        <div class="card">
+          <h3>导出</h3>
+          <button class="btn" style="width:100%;margin-bottom:8px"> ⇒ 导出 xlsx（5 个 Sheet）</button>
+          <button class="btn" style="width:100%"> ⇱ 导出离线 HTML 报告</button>
+          <div class="subnote" style="margin-top:10px">HTML 报告内嵌图表库，双击即可离线查看。</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="delta-cards">
+          <div class="dcard"><div class="t">HBM 命中率</div><div class="v">92.3 <span style="font-size:12px;color:var(--muted)">vs 90.2%</span></div><div class="d up">▲ +2.1 pt</div></div>
+          <div class="dcard"><div class="t">Ext 命中率</div><div class="v">87.1 <span style="font-size:12px;color:var(--muted)">vs —</span></div><div class="d muted">新增 external 缓存</div></div>
+          <div class="dcard"><div class="t">TTFT avg</div><div class="v">412ms <span style="font-size:12px;color:var(--muted)">vs 449</span></div><div class="d up">▼ −8.2%（更优）</div></div>
+          <div class="dcard"><div class="t">输出吞吐</div><div class="v">3,214 <span style="font-size:12px;color:var(--muted)">vs 3,022</span></div><div class="d up">▲ +6.4%</div></div>
+        </div>
+
+        <div class="card" style="margin-bottom:12px">
+          <div class="chart-head"><b>命中率时序叠加</b><span class="tag gray" style="font-size:10px">R1 · 全量阶段</span>
+            <div class="legend"><span><i style="background:var(--hbm)"></i>A·HBM</span><span><i style="background:#8ab4ff;opacity:.5"></i>B·HBM</span><span><i style="background:var(--ext)"></i>A·Ext</span></div>
+          </div>
+          <div id="cmp-chart"></div>
+        </div>
+
+        <div class="row" style="margin-bottom:12px">
+          <div class="card" style="flex:1.2">
+            <div class="chart-head"><b>各轮次 TTFT avg (ms)</b><div class="legend"><span><i style="background:var(--brand)"></i>A·UCM</span><span><i style="background:#5a5e66"></i>B·基线</span></div></div>
+            <div id="bar-chart"></div>
+          </div>
+          <div class="card" style="flex:1">
+            <div class="chart-head"><b>五维评分</b><span class="muted" style="font-size:10.5px">min–max 归一</span></div>
+            <div id="radar"></div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="card" style="flex:1">
+            <div class="chart-head"><b>配置差异</b></div>
+            <table class="mini-table">
+              <thead><tr><th>参数</th><th>A · UCM POSIX</th><th>B · 基线</th></tr></thead>
+              <tbody>
+                <tr><td class="diff-key">ucm_store</td><td>posix</td><td class="muted">（未启用）</td></tr>
+                <tr><td class="diff-key">dp</td><td>2</td><td>1</td></tr>
+                <tr><td>input_len</td><td>32,768</td><td>32,768</td></tr>
+                <tr><td>output_len</td><td>512</td><td>512</td></tr>
+                <tr><td>repeat_rate</td><td>90%</td><td>90%</td></tr>
+                <tr><td>concurrency</td><td>40</td><td>40</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card" style="flex:1.3">
+            <div class="chart-head"><b>DP 域命中率矩阵</b><span class="muted" style="font-size:10.5px">颜色越深命中越高</span></div>
+            <table class="mini-table">
+              <thead><tr><th></th><th>dp0 · HBM</th><th>dp1 · HBM</th><th>dp0 · Ext</th><th>dp1 · Ext</th></tr></thead>
+              <tbody>
+                <tr><td>A · UCM</td><td style="background:rgba(79,139,255,.55)">92.9%</td><td style="background:rgba(79,139,255,.48)">91.7%</td><td style="background:rgba(19,194,194,.5)">87.6%</td><td style="background:rgba(19,194,194,.44)">86.6%</td></tr>
+                <tr><td>B · 基线</td><td style="background:rgba(79,139,255,.5)">91.0%</td><td class="muted">—</td><td class="muted">—</td><td class="muted">—</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ P5 数据集 ============ -->
+  <section class="page" id="page-datasets">
+    <div class="card" style="margin-bottom:14px">
+      <h3>快速生成 <span class="sec-tag">可独立生成入库，或跟随测试配置自动生成</span></h3>
+      <div class="row" style="margin-bottom:12px">
+        <div class="field"><label>Tokenizer</label><select class="sel"><option>DeepSeek-V3.2（预置）</option><option>Qwen3-32B（预置）</option><option>自定义目录…</option></select></div>
+        <div class="field" style="max-width:150px"><label>模式</label><select class="sel"><option>gsm8k 文本</option><option>tokenid 精确</option></select></div>
+        <div class="field"><label>input_len</label><input class="inp mono" value="32768"></div>
+        <div class="field"><label>data_num</label><input class="inp mono" value="160"></div>
+        <div class="field"><label>repeat_rate</label><div class="unit"><input class="inp mono" value="90"><span class="u">%</span></div></div>
+        <div class="field" style="max-width:120px"><label>&nbsp;</label><button class="btn primary" style="width:100%">生成</button></div>
+      </div>
+      <div class="row" style="align-items:center">
+        <div style="flex:1"><div class="progress"><i style="width:68%"></i></div></div>
+        <span class="muted" style="font-size:11.5px">生成中 109/160 行 · 68% · 预计 40s · <a href="#" style="color:var(--brand)">取消</a></span>
+      </div>
+    </div>
+
+    <div class="ds-grid">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:13px">90% · 32768 · 固定长度</b><span class="tag blue">gsm8k</span></div>
+        <div class="subnote" style="margin:8px 0 12px">DeepSeek-V3.2 · 160 行 · 21.4 MB<br>repeat 90% · prefix 160 · seed 42</div>
+        <div class="hist" style="height:40px;margin-bottom:12px"><i style="height:30%"></i><i style="height:55%"></i><i style="height:88%"></i><i style="height:100%"></i><i style="height:96%"></i><i style="height:70%"></i><i style="height:40%"></i><i style="height:22%"></i></div>
+        <div class="row"><button class="btn sm">预览</button><button class="btn sm">用于新测试</button><button class="btn sm ghost">⋯</button></div>
+      </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:13px">50% · 长度抖动 G</b><span class="tag blue">gsm8k</span></div>
+        <div class="subnote" style="margin:8px 0 12px">Qwen3-32B · 8,192 行 · 1.1 GB<br>G 32768±49152 · repeat 50%</div>
+        <div class="hist" style="height:40px;margin-bottom:12px"><i style="height:20%"></i><i style="height:42%"></i><i style="height:75%"></i><i style="height:92%"></i><i style="height:100%"></i><i style="height:88%"></i><i style="height:52%"></i><i style="height:30%"></i></div>
+        <div class="row"><button class="btn sm">预览</button><button class="btn sm">用于新测试</button><button class="btn sm ghost">⋯</button></div>
+      </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:13px">tokenid · 100%重复</b><span class="tag purple">tokenid</span></div>
+        <div class="subnote" style="margin:8px 0 12px">DeepSeek-V3.2 · 320 行 · 40 MB<br>纯 token id 构造 · 误差 0.2% ✓</div>
+        <div class="hist" style="height:40px;margin-bottom:12px"><i style="height:34%"></i><i style="height:60%"></i><i style="height:90%"></i><i style="height:100%"></i><i style="height:92%"></i><i style="height:66%"></i><i style="height:38%"></i><i style="height:20%"></i></div>
+        <div class="row"><button class="btn sm">预览</button><button class="btn sm">用于新测试</button><button class="btn sm ghost">⋯</button></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ P6 设置 ============ -->
+  <section class="page" id="page-settings">
+    <div class="tabs"><span class="on">环境诊断</span><span>Tokenizer</span><span>外观</span><span>存储</span><span>关于</span></div>
+    <div class="grid2">
+      <div class="card">
+        <h3>环境诊断 <button class="btn sm ghost" style="margin-left:auto">重新检测</button><button class="btn sm ghost">复制报告</button></h3>
+        <div class="diag-item"><div class="ic ok">✓</div><div><b>Sidecar 服务</b><p>127.0.0.1:52118 · Uvicorn 运行中 · Python 3.11.9（内嵌）</p></div></div>
+        <div class="diag-item"><div class="ic ok">✓</div><div><b>AISBench</b><p>ais_bench_benchmark 3.1.20260630 · 入口 sidecar.exe --child aisbench</p></div></div>
+        <div class="diag-item"><div class="ic ok">✓</div><div><b>transformers</b><p>4.57.1 — DeepSeek/Qwen tokenizer 正常；GLM 系列模型需 ≥5.0，如需评测 GLM 请升级词表包</p></div></div>
+        <div class="diag-item"><div class="ic bad">✕</div><div><b>预置 tokenizer 完整性</b><p>GLM-4.6 词表缺失或校验和不符（预计 18 MB）。<a href="#" style="color:var(--brand)">重新下载</a> 或手动导入目录。</p></div></div>
+        <div class="diag-item"><div class="ic ok">✓</div><div><b>网络出站自检</b><p>192.168.1.10:8000 /metrics 可达（12ms）· 系统代理已在采集器内禁用</p></div></div>
+        <div class="diag-item" style="border:none"><div class="ic ok">✓</div><div><b>磁盘空间</b><p>D: 剩余 312 GB · 当前数据目录占用 1.8 GB</p></div></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="card">
+          <h3>AISBench 工作区</h3>
+          <div class="field" style="margin-bottom:10px"><label>work_path（AISBench 根目录）</label><input class="inp mono" value="%SIDECAR%/ais_bench" readonly></div>
+          <div class="field" style="margin-bottom:10px"><label>dataset_path（数据集目录）</label><input class="inp mono" value="%APPDATA%/…/datasets"></div>
+          <div class="field"><label>output_dir（AISBench --work-dir）</label><input class="inp mono" value="%APPDATA%/…/outputs/{run_id}/results"></div>
+          <div class="subnote" style="margin-top:10px">以上目录由应用自动管理，一般无需修改。</div>
+        </div>
+        <div class="card">
+          <h3>采集与图表</h3>
+          <div class="kv"><span>指标轮询间隔</span><div class="seg"><span>2s</span><span class="on">5s</span><span>10s</span><span>30s</span></div></div>
+          <div class="kv" style="border:none"><span>实时曲线窗口</span><div class="seg"><span>5min</span><span class="on">10min</span><span>30min</span></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  </div>
+</div>
+
+<!-- ============ 详情抽屉 ============ -->
+<div class="drawer-mask" id="mask" onclick="closeDrawer()"></div>
+<div id="drawer">
+  <div class="drawer-head">
+    <div><b style="font-size:14px">90%重复 · UCM POSIX</b><div class="muted mono" style="font-size:11px;margin-top:2px">run_20260920_114530 · 2 轮 · 26 min</div></div>
+    <div style="margin-left:auto;display:flex;gap:7px"><button class="btn sm">导出</button><button class="btn sm ghost" onclick="closeDrawer()">✕</button></div>
+  </div>
+  <div class="drawer-body">
+    <div class="row" style="margin-bottom:12px">
+      <div class="mcard" style="flex:1"><div class="t">HBM</div><div class="v" style="font-size:22px">92.3%</div></div>
+      <div class="mcard" style="flex:1"><div class="t">Ext</div><div class="v" style="font-size:22px;color:var(--ext)">87.1%</div></div>
+      <div class="mcard" style="flex:1"><div class="t">TTFT</div><div class="v" style="font-size:22px">412ms</div></div>
+      <div class="mcard" style="flex:1"><div class="t">吞吐</div><div class="v" style="font-size:22px">3,214</div></div>
+    </div>
+    <div class="card" style="margin-bottom:12px;padding:12px">
+      <div class="chart-head" style="margin-bottom:4px"><b style="font-size:12px">轮 × 阶段结果</b></div>
+      <table class="mini-table">
+        <thead><tr><th>轮</th><th>阶段</th><th>并发</th><th>时长</th><th>HBM</th><th>Ext</th><th>TTFT avg</th><th>吞吐</th></tr></thead>
+        <tbody>
+          <tr style="color:var(--muted)"><td>R1</td><td><span class="tag gray" style="padding:1px 7px">warmup</span></td><td>2</td><td>42s</td><td>0.0%</td><td>0.0%</td><td>—</td><td>—</td></tr>
+          <tr><td>R1</td><td><span class="tag blue" style="padding:1px 7px">full</span></td><td>40</td><td>12:32</td><td><b>92.3%</b></td><td><b style="color:var(--ext)">87.1%</b></td><td>412ms</td><td>3,214</td></tr>
+          <tr style="color:var(--muted)"><td>R2</td><td>待执行</td><td colspan="6" class="muted">UCM POSIX 开启 · 排队中</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card" style="margin-bottom:12px;padding:12px">
+      <div class="chart-head"><b style="font-size:12px">指标回放</b><div class="legend"><span><i style="background:var(--hbm)"></i>HBM</span><span><i style="background:var(--ext)"></i>Ext</span></div></div>
+      <div id="replay-chart"></div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="chart-head"><b style="font-size:12px">操作</b></div>
+      <div class="row">
+        <button class="btn sm">标记为练习轮</button><button class="btn sm">添加备注</button>
+        <button class="btn sm">导出 xlsx</button><button class="btn sm">HTML 报告</button>
+        <button class="btn sm danger" style="margin-left:auto">删除 run…</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" style="position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--bg3);border:1px solid var(--border2);color:#fff;padding:10px 18px;border-radius:10px;font-size:12.5px;z-index:99;transition:.25s;box-shadow:0 10px 30px rgba(0,0,0,.5)"></div>
+
+<script>
+/* ================= 导航 ================= */
+const titles={config:["新建测试","配置 · 预设 · 数据集 · 多轮计划"],monitor:["运行监控","实时指标 · 日志流 · 阶段进度"],history:["运行记录","12 个 run · 详情 / 导出 / 标记"],compare:["对比分析","2 个 run · 排除预埋与练习轮"],datasets:["数据集","生成 · 预览 · 复用"],settings:["设置","环境诊断 · Tokenizer · 存储"]};
+function go(p){
+  document.querySelectorAll(".page").forEach(e=>e.classList.remove("active"));
+  document.getElementById("page-"+p).classList.add("active");
+  document.querySelectorAll(".nav-item").forEach(e=>e.classList.toggle("active",e.dataset.page===p));
+  document.getElementById("page-title").textContent=titles[p][0];
+  document.getElementById("page-crumb").textContent=titles[p][1];
+  document.getElementById("content").scrollTop=0;
+  if(p==="monitor")renderMonitor();
+  if(p==="compare")renderCompare();
+  if(p==="history")drawReplay();
+}
+document.querySelectorAll(".nav-item").forEach(e=>e.onclick=()=>go(e.dataset.page));
+
+/* ================= SVG 工具 ================= */
+const NS="http://www.w3.org/2000/svg";
+function svgEl(w,h){const s=document.createElementNS(NS,"svg");s.setAttribute("viewBox",`0 0 ${w} ${h}`);s.setAttribute("width","100%");s.setAttribute("height",h);s.style.display="block";return s}
+function pathOf(pts){return pts.map((p,i)=>(i?"L":"M")+p[0].toFixed(1)+","+p[1].toFixed(1)).join(" ")}
+function lineChart(el,{series,w=560,h=190,pad={l:38,r:10,t:10,b:22},yMin=0,yMax=100,fmt=v=>v+"%",phaseAt=null,xticks=5}){
+  const iw=w-pad.l-pad.r, ih=h-pad.t-pad.b;
+  const s=svgEl(w,h);
+  for(let i=0;i<=4;i++){const y=pad.t+ih*i/4;
+    s.innerHTML+=`<line x1="${pad.l}" y1="${y}" x2="${w-pad.r}" y2="${y}" stroke="rgba(255,255,255,.06)"/>`+
+      `<text x="${pad.l-6}" y="${y+3}" fill="#6d7078" font-size="9" text-anchor="end">${fmt(yMax-(yMax-yMin)*i/4)}</text>`}
+  const n=series[0].data.length;
+  for(let i=0;i<xticks;i++){const x=pad.l+iw*i/(xticks-1);
+    s.innerHTML+=`<text x="${x}" y="${h-6}" fill="#6d7078" font-size="9" text-anchor="middle">${Math.round(i*n/(xticks-1)*5/60)}min</text>`}
+  if(phaseAt!=null){const x=pad.l+iw*phaseAt/(n-1);
+    s.innerHTML+=`<line x1="${x}" y1="${pad.t}" x2="${x}" y2="${pad.t+ih}" stroke="rgba(255,255,255,.22)" stroke-dasharray="3 3"/>`+
+      `<text x="${x+5}" y="${pad.t+11}" fill="#a2a5ab" font-size="9">全量开始</text>`}
+  series.forEach(sr=>{
+    const pts=sr.data.map((v,i)=>[pad.l+iw*i/(n-1),pad.t+ih-(v-yMin)/(yMax-yMin)*ih]);
+    if(sr.area){const id="g"+Math.random().toString(36).slice(2,7);
+      s.innerHTML+=`<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${sr.color}" stop-opacity=".22"/><stop offset="1" stop-color="${sr.color}" stop-opacity="0"/></linearGradient></defs>
+      <path d="${pathOf(pts)} L ${pts[pts.length-1][0]},${pad.t+ih} L ${pts[0][0]},${pad.t+ih} Z" fill="url(#${id})"/>`}
+    s.innerHTML+=`<path d="${pathOf(pts)}" fill="none" stroke="${sr.color}" stroke-width="1.8" ${sr.dash?'stroke-dasharray="4 4"':''} stroke-linejoin="round"/>`;
+  });
+  el.innerHTML="";el.appendChild(s);
+}
+function donut(el,items,size=132){
+  const r=48,c=2*Math.PI*r;let off=0;const s=svgEl(size,size);
+  items.forEach(it=>{const len=c*it.v/100;
+    s.innerHTML+=`<circle cx="66" cy="66" r="${r}" fill="none" stroke="${it.c}" stroke-width="16" stroke-dasharray="${len} ${c-len}" stroke-dashoffset="${-off}" transform="rotate(-90 66 66)" stroke-linecap="butt"/>`;
+    off+=len});
+  s.innerHTML+=`<text x="66" y="62" fill="#e9eaec" font-size="17" font-weight="700" text-anchor="middle">99.0%</text><text x="66" y="78" fill="#6d7078" font-size="9" text-anchor="middle">综合命中</text>`;
+  el.innerHTML="";el.appendChild(s);
+}
+function barChart(el,{groups,series,w=430,h=185,pad={l:34,r:8,t:8,b:24},unit=""}){
+  const iw=w-pad.l-pad.r,ih=h-pad.t-pad.b,s=svgEl(w,h),gw=iw/groups.length;
+  const ymax=Math.max(...series.flatMap(sr=>sr.data))*1.15;
+  for(let i=0;i<=3;i++){const y=pad.t+ih*i/3;
+    s.innerHTML+=`<line x1="${pad.l}" y1="${y}" x2="${w-pad.r}" y2="${y}" stroke="rgba(255,255,255,.06)"/><text x="${pad.l-5}" y="${y+3}" fill="#6d7078" font-size="9" text-anchor="end">${Math.round(ymax-ymax*i/3)}</text>`}
+  groups.forEach((g,gi)=>{
+    const bw=Math.min(26,(gw-24)/series.length-4);
+    series.forEach((sr,si)=>{
+      const x=pad.l+gi*gw+gw/2-((series.length*bw+(series.length-1)*4)/2)+si*(bw+4);
+      const bh=sr.data[gi]/ymax*ih;
+      s.innerHTML+=`<rect x="${x}" y="${pad.t+ih-bh}" width="${bw}" height="${bh}" rx="3" fill="${sr.color}" opacity="${sr.op||1}"/>`;
+    });
+    s.innerHTML+=`<text x="${pad.l+gi*gw+gw/2}" y="${h-6}" fill="#a2a5ab" font-size="9.5" text-anchor="middle">${g}</text>`;
+  });
+  el.innerHTML="";el.appendChild(s);
+}
+function radar(el,axes,series,w=330,h=210){
+  const cx=w/2,cy=h/2+6,R=74,n=axes.length,s=svgEl(w,h);
+  for(let ring=1;ring<=4;ring++){let p="";
+    for(let i=0;i<n;i++){const a=-Math.PI/2+i*2*Math.PI/n,r=R*ring/4;p+=(cx+r*Math.cos(a))+","+(cy+r*Math.sin(a))+" "}
+    s.innerHTML+=`<polygon points="${p}" fill="none" stroke="rgba(255,255,255,.07)"/>`}
+  axes.forEach((ax,i)=>{const a=-Math.PI/2+i*2*Math.PI/n;
+    s.innerHTML+=`<line x1="${cx}" y1="${cy}" x2="${cx+R*Math.cos(a)}" y2="${cy+R*Math.sin(a)}" stroke="rgba(255,255,255,.07)"/>`+
+      `<text x="${cx+(R+14)*Math.cos(a)}" y="${cy+(R+14)*Math.sin(a)+3}" fill="#a2a5ab" font-size="9.5" text-anchor="middle">${ax}</text>`});
+  series.forEach(sr=>{let p="";
+    for(let i=0;i<n;i++){const a=-Math.PI/2+i*2*Math.PI/n,r=R*sr.data[i]/100;p+=(cx+r*Math.cos(a))+","+(cy+r*Math.sin(a))+" "}
+    s.innerHTML+=`<polygon points="${p}" fill="${sr.color}" fill-opacity=".13" stroke="${sr.color}" stroke-width="1.6"/>`});
+  el.innerHTML="";el.appendChild(s);
+}
+
+/* ================= 数据 ================= */
+const N=96,PHASE=26;
+function genSeries(base,ramp,noise,pre=4){const a=[];for(let i=0;i<N;i++){
+  if(i<PHASE)a.push(pre+(Math.random()-0.5)*2);
+  else{const t=(i-PHASE)/(N-PHASE);a.push(Math.min(base,ramp+t*(base-ramp))+(Math.random()-0.5)*noise)}}
+  return a.map(v=>+v.toFixed(1))}
+const dHbm=genSeries(92.3,55,1.6,3),dExt=genSeries(87.1,42,2.2,2),dComp=dHbm.map((v,i)=>+(v+(100-v)*(100-dExt[i])/100).toFixed(1));
+const dRun=[],dWait=[],dKv=[];
+for(let i=0;i<N;i++){if(i<PHASE){dRun.push(2);dWait.push(0);dKv.push(14+Math.random()*3)}
+  else{const t=(i-PHASE)/(N-PHASE);dRun.push(Math.round(Math.min(40,6+t*44)+(Math.random()-.5)*3));
+    dWait.push(i<PHASE+8?Math.round(Math.random()*14):Math.round(Math.random()*2));dKv.push(+(60+t*15+(Math.random()-.5)*4).toFixed(1))}}
+const dBHbm=genSeries(90.2,50,1.8,3);
+
+function renderMonitor(){
+  lineChart(document.getElementById("hit-chart"),{series:[
+    {data:dHbm,color:"#4f8bff",area:true},{data:dExt,color:"#13c2c2"},{data:dComp,color:"#9254de",dash:true}
+  ],phaseAt:PHASE,yMax:100,h:200});
+  lineChart(document.getElementById("req-chart"),{series:[
+    {data:dRun,color:"#8ab4ff",area:true},{data:dWait.map(v=>v*2),color:"#f0be63"},{data:dKv,color:"#13c2c2",dash:true}
+  ],yMax:100,h:200,fmt:v=>Math.round(v),phaseAt:PHASE});
+  donut(document.getElementById("donut"),[{v:85.7,c:"#4f8bff"},{v:8.9,c:"#9254de"},{v:5.4,c:"#5a5e66"}]);
+  const layers=[["Cache 层（内存缓冲）",64.2,"#9254de"],["Posix Store（NVMe）",27.8,"#13c2c2"],["YuanRong DRAM",5.4,"#4f8bff"],["YuanRong SSD",2.6,"#e2a336"]];
+  document.getElementById("layers").innerHTML=layers.map(l=>`<div><div style="display:flex;justify-content:space-between;font-size:11.5px;margin-bottom:4px"><span class="muted">${l[0]}</span><b>${l[1]}%</b></div><div class="progress"><i style="width:${l[1]}%;background:${l[2]}"></i></div></div>`).join("");
+  const h=document.getElementById("hist");h.innerHTML="";
+  for(let i=0;i<26;i++){const c=1-Math.abs(i-13)/15;h.innerHTML+=`<i style="height:${Math.max(8,c*100*(0.75+Math.random()*0.25))}%"></i>`}
+}
+function renderCompare(){
+  lineChart(document.getElementById("cmp-chart"),{series:[
+    {data:dHbm,color:"#4f8bff",area:true},{data:dBHbm,color:"#8ab4ff"},{data:dExt,color:"#13c2c2"}
+  ],phaseAt:PHASE,yMax:100,h:200});
+  barChart(document.getElementById("bar-chart"),{groups:["R1","R2"],series:[
+    {data:[412,428],color:"#3b82f6"},{data:[449,462],color:"#5a5e66"}]});
+  radar(document.getElementById("radar"),["HBM命中","Ext命中","TTFT","TPOT","吞吐"],[
+    {data:[92,87,78,74,88],color:"#3b82f6"},{data:[90,20,70,72,82],color:"#5a5e66"}]);
+}
+function drawReplay(){
+  const el=document.getElementById("replay-chart");if(el)lineChart(el,{series:[{data:dHbm,color:"#4f8bff",area:true},{data:dExt,color:"#13c2c2"}],phaseAt:PHASE,h:150,yMax:100});
+}
+function openDrawer(){document.getElementById("drawer").classList.add("open");document.getElementById("mask").classList.add("show");drawReplay()}
+function closeDrawer(){document.getElementById("drawer").classList.remove("open");document.getElementById("mask").classList.remove("show")}
+let toastTimer;function toast(msg){const t=document.getElementById("toast");t.textContent=msg;t.style.transform="translateX(-50%) translateY(0)";clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.style.transform="translateX(-50%) translateY(80px)",2600)}
+document.querySelectorAll(".switch").forEach(s=>s.onclick=()=>s.classList.toggle("on"));
+document.querySelectorAll(".seg").forEach(g=>g.querySelectorAll("span").forEach(sp=>sp.onclick=()=>{g.querySelectorAll("span").forEach(x=>x.classList.remove("on"));sp.classList.add("on")}));
+renderMonitor();drawReplay();
+</script>
+</body>
+</html>

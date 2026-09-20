@@ -1,0 +1,10 @@
+# Sidecar runtime dependencies (Python 3.10–3.12, developed on 3.11)
+fastapi>=0.110
+uvicorn[standard]>=0.27
+httpx>=0.26
+openpyxl>=3.1
+transformers>=4.40        # tokenizer-only usage; GLM-5 系列词表需 >=5.0
+websockets>=12            # WS 客户端测试用
+
+# 生产环境（PyInstaller 打包时）还需：
+# ais_bench_benchmark==3.1.20260630

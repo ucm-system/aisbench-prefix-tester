@@ -1,0 +1,239 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api, downloadLink, wsRun, type RoundRow } from "../api";
+import { LineChart, Donut } from "../charts";
+import { useToast } from "../App";
+
+type Ev = { type: string; ts: number; [k: string]: any };
+
+const HBM = "#4f8bff", EXT = "#13c2c2", UCMC = "#9254de";
+
+export default function MonitorPage({ route }: { route: string }) {
+  const toast = useToast();
+  const runId = route.split("/")[1];
+  const [events, setEvents] = useState<Ev[]>([]);
+  const [logs, setLogs] = useState<{ line: string; err?: boolean; warn?: boolean }[]>([]);
+  const [status, setStatus] = useState("connecting");
+  const [phase, setPhase] = useState("");
+  const [round, setRound] = useState(0);
+  const [totalRounds, setTotalRounds] = useState(1);
+  const [samples, setSamples] = useState<{ ts: number; flat: Record<string, number> }[]>([]);
+  const [phaseRate, setPhaseRate] = useState<{ per_dp: any; agg: any; phase: string } | null>(null);
+  const [ucm, setUcm] = useState<boolean | null>(null);
+  const [detail, setDetail] = useState<any>(null);
+  const [filter, setFilter] = useState("all");
+  const logRef = useRef<HTMLDivElement>(null);
+  const followRef = useRef(true);
+
+  // load past data if the run already exists
+  useEffect(() => {
+    if (!runId) return;
+    api.get<any>(`/api/runs/${runId}`).then((d) => {
+      setDetail(d);
+      setStatus(d.status);
+      setTotalRounds((d.config?.rounds ?? [1]).length || 1);
+      const rounds: RoundRow[] = d.rounds ?? [];
+      const lastFull = [...rounds].reverse().find((r) => r.phase === "full");
+      if (lastFull) setPhaseRate({ per_dp: lastFull.hit_rate?.per_dp, agg: lastFull.hit_rate?.aggregated, phase: "full" });
+      if (d.status === "running" || d.status === "pending") {
+        const ws = wsRun(runId);
+        ws.onmessage = (m) => {
+          const ev: Ev = JSON.parse(m.data);
+          setEvents((prev) => [...prev.slice(-4000), ev]);
+          if (ev.type === "status") {
+            setStatus(ev.status); setPhase(ev.phase ?? ""); setRound(ev.round ?? 0);
+            setTotalRounds(ev.total_rounds ?? 1);
+          } else if (ev.type === "log") {
+            const line = ev.line as string;
+            setLogs((prev) => [...prev.slice(-3000), {
+              line, err: line.includes("ERROR") || line.startsWith("[exit"),
+              warn: line.includes("WARN"),
+            }]);
+          } else if (ev.type === "metrics") {
+            setSamples((prev) => [...prev.slice(-600), { ts: ev.ts, flat: ev.sample.flat }]);
+            if (ev.sample?.ucm_detected != null) setUcm(ev.sample.ucm_detected);
+          } else if (ev.type === "phase_rate") {
+            setPhaseRate({ per_dp: ev.rate?.per_dp, agg: ev.rate?.aggregated, phase: ev.phase });
+          } else if (ev.type === "warning") {
+            toast(ev.message);
+          }
+        };
+        ws.onclose = () => {};
+        return () => ws.close();
+      }
+    }).catch(() => {});
+  }, [runId]);
+
+  useEffect(() => {
+    if (followRef.current && logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [logs]);
+
+  // sliding-window hit rates from consecutive samples
+  const trend = useMemo(() => {
+    const hbm: number[] = [], ext: number[] = [], comp: number[] = [], run: number[] = [];
+    let prev = samples[0]?.flat;
+    for (const s of samples) {
+      const f = s.flat;
+      const dq = prev ? f.hbm_q - prev.hbm_q : 0;
+      const deq = prev ? f.ext_q - prev.ext_q : 0;
+      const hr = dq > 0 ? (f.hbm_h - prev.hbm_h) / dq : null;
+      const er = deq > 0 ? (f.ext_h - prev.ext_h) / deq : null;
+      hbm.push(hr == null ? NaN : hr * 100);
+      ext.push(er == null ? NaN : er * 100);
+      comp.push(hr != null && er != null ? (er * (1 - hr) + hr) * 100 : NaN);
+      run.push(f.running ?? 0);
+      prev = f;
+    }
+    const clean = (a: number[]) => a.map((v) => (Number.isFinite(v) ? v : 0));
+    return { hbm: clean(hbm), ext: clean(ext), comp: clean(comp), run: clean(run) };
+  }, [samples]);
+
+  const latest = samples[samples.length - 1]?.flat ?? {};
+  const agg = phaseRate?.agg ?? {};
+  const ttft = latest.ttft_cnt ? (latest.ttft_sum / latest.ttft_cnt) * 1000 : (detail ? (detail.rounds ?? []).filter((r: any) => r.phase === "full").at(-1)?.metrics?.ttft_avg_ms ?? 0 : 0);
+
+  const donutItems = [
+    { v: +(latest.ucm_q_tok ? ((latest.ucm_hbm_tok ?? 0) / latest.ucm_q_tok) * 100 : agg.hbm_hit_rate * 100 || 0).toFixed(1), c: HBM },
+    { v: +(latest.ucm_q_tok ? ((latest.ucm_hit_tok ?? 0) / latest.ucm_q_tok) * 100 : agg.ext_hit_rate * 100 || 0).toFixed(1), c: UCMC },
+  ];
+  const missV = Math.max(0, 100 - donutItems[0].v - donutItems[1].v);
+  donutItems.push({ v: +missV.toFixed(1), c: "#5a5e66" });
+
+  const shownLogs = logs.filter((l) =>
+    filter === "all" ? true : filter === "warn" ? l.warn || l.err : l.err);
+
+  const card = (t: React.ReactNode, v: React.ReactNode, s: string, barColor?: string, pct?: number) => (
+    <div className="mcard">
+      <div className="t">{t}</div>
+      <div className="v">{v}</div>
+      <div className="s">{s}</div>
+      {barColor && <div className="bar" style={{ background: barColor, width: `${Math.min(100, pct ?? 0)}%` }} />}
+    </div>);
+
+  return (
+    <>
+      {!runId && (
+        <div className="alert info" style={{ marginBottom: 14 }}>
+          <span>ℹ</span><div>当前没有选中的 run。从「运行记录」打开一个 run，或从「新建测试」发起测试。</div>
+        </div>
+      )}
+      {runId && (
+        <>
+          <div className="run-head">
+            <span className="pulse" style={{ background: status === "running" ? undefined : "#6d7078", animation: status === "running" ? undefined : "none" }} />
+            <h2>{runId}</h2>
+            <span className="tag">{detail?.name}</span>
+            <span className="tag">{status}</span>
+            {totalRounds > 0 && <span className="tag gray">第 {round || 1} / {totalRounds} 轮</span>}
+            {status === "running" && (
+              <button className="btn sm danger" style={{ marginLeft: "auto" }}
+                onClick={async () => { await api.post(`/api/runs/${runId}/stop`); toast("已请求停止"); }}>
+                ■ 停止测试
+              </button>
+            )}
+          </div>
+          <div className="phases">
+            <div className={`phase ${status !== "running" ? "done" : phase === "warmup" ? "running" : "done"}`}>
+              {status !== "running" ? "✓" : phase === "warmup" ? "●" : "✓"} 预埋 warmup（并发 = dp）
+            </div>
+            <div className="phase-arrow" />
+            <div className={`phase ${phase === "full" && status === "running" ? "running" : status === "running" ? "" : "done"}`}>
+              全量 full（并发 = max_concurrency）
+            </div>
+          </div>
+
+          <div className="metric-cards">
+            {card(<span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: HBM, marginRight: 6 }} />HBM 命中率</span>,
+              `${((agg.hbm_hit_rate ?? 0) * 100).toFixed(1)}%`, "阶段快照差分", HBM, (agg.hbm_hit_rate ?? 0) * 100)}
+            {card(<span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: EXT, marginRight: 6 }} />Ext 命中率</span>,
+              `${((agg.ext_hit_rate ?? 0) * 100).toFixed(1)}%`, "external prefix cache", EXT, (agg.ext_hit_rate ?? 0) * 100)}
+            {card(<span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: UCMC, marginRight: 6 }} />综合命中率</span>,
+              `${(((agg.ext_hit_rate ?? 0) * (1 - (agg.hbm_hit_rate ?? 0)) + (agg.hbm_hit_rate ?? 0)) * 100).toFixed(1)}%`, "ext×(1−hbm)+hbm", UCMC,
+              ((agg.ext_hit_rate ?? 0) * (1 - (agg.hbm_hit_rate ?? 0)) + (agg.hbm_hit_rate ?? 0)) * 100)}
+            {card("已完成请求", `${Math.round(latest.success ?? 0)}`, `running ${Math.round(latest.running ?? 0)} · waiting ${Math.round(latest.waiting ?? 0)}`)}
+            {card("avg TTFT", `${ttft.toFixed(0)}ms`, `采样 ${samples.length} 次`)}
+          </div>
+
+          <div className="monitor-grid">
+            <div className="card">
+              <div className="chart-head"><b>命中率趋势</b><span className="tag gray" style={{ fontSize: 10 }}>实时 · 滑动窗差分</span>
+                <div className="legend">
+                  <span><i style={{ background: HBM }} />HBM</span>
+                  <span><i style={{ background: EXT }} />External</span>
+                  <span className="dashed" style={{ color: "#b89af1" }}><i />综合</span>
+                </div>
+              </div>
+              {samples.length > 1
+                ? <LineChart series={[
+                    { data: trend.hbm, color: HBM, area: true },
+                    { data: trend.ext, color: EXT },
+                    { data: trend.comp, color: UCMC, dash: true }]} yMax={100} height={200}
+                    fmt={(v) => `${v}%`} xLabel={(i, n) => `${Math.round((i * n))}`} />
+                : <div className="subnote">等待指标采样…</div>}
+            </div>
+            <div className="card">
+              <div className="chart-head"><b>Token 流向 / UCM</b>
+                {ucm != null && <span className={`tag ${ucm ? "purple" : "warn"}`} style={{ fontSize: 10 }}>{ucm ? "ucm: 已检测" : "未检测到 ucm:"}</span>}
+              </div>
+              {ucm === false && (
+                <div className="alert warn" style={{ marginBottom: 10 }}>
+                  <span>⚠</span><div>服务 /metrics 中未发现 ucm: 前缀指标——可能未启用 UCM 或未暴露，仅展示 vLLM 原生指标。</div>
+                </div>)}
+              <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+                <Donut items={donutItems} caption="query 构成" />
+                <div style={{ flex: 1 }}>
+                  <div className="kv"><span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: HBM, marginRight: 7 }} />HBM 命中 tokens</span><b>{Math.round(latest.ucm_hbm_tok ?? 0).toLocaleString()}</b></div>
+                  <div className="kv"><span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: UCMC, marginRight: 7 }} />UCM 命中 tokens</span><b>{Math.round(latest.ucm_hit_tok ?? 0).toLocaleString()}</b></div>
+                  <div className="kv"><span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "#5a5e66", marginRight: 7 }} />查询总量 tokens</span><b>{Math.round(latest.ucm_q_tok ?? 0).toLocaleString()}</b></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="monitor-grid2">
+            <div className="card">
+              <div className="chart-head">
+                <div className="seg">
+                  {["all", "warn", "err"].map((f) => (
+                    <span key={f} className={filter === f ? "on" : ""}
+                      onClick={() => setFilter(f)}>{f === "all" ? "全部" : f === "warn" ? "WARN" : "ERROR"}</span>
+                  ))}
+                </div>
+                <label style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", fontSize: 11.5, color: "var(--muted)" }}>
+                  <input type="checkbox" defaultChecked onChange={(e) => (followRef.current = e.target.checked)} />跟随滚动
+                </label>
+                <a className="btn sm ghost" href={downloadLink(`/api/runs/${runId}/logs/download?stream=stdout`)}>导出日志</a>
+              </div>
+              <div className="logview" ref={logRef}>
+                {shownLogs.length === 0 && <div className="ln muted">暂无日志…</div>}
+                {shownLogs.slice(-500).map((l, i) => (
+                  <div key={i} className={`ln ${l.err ? "err" : l.warn ? "warn" : ""}`}>{l.line}</div>
+                ))}
+              </div>
+            </div>
+            <div className="card">
+              <div className="chart-head"><b>DP 域明细</b><span className="tag gray" style={{ fontSize: 10 }}>阶段快照差分</span></div>
+              <table className="mini-table">
+                <thead><tr><th>DP 域</th><th>HBM 命中率</th><th>hits / queries</th><th>Ext 命中率</th><th>hits / queries</th></tr></thead>
+                <tbody>
+                  {Object.entries(phaseRate?.per_dp ?? {}).map(([dp, d]: [string, any]) => (
+                    <tr key={dp}>
+                      <td><b>{dp}</b></td>
+                      <td><b style={{ color: HBM }}>{(d.hbm_hit_rate * 100).toFixed(1)}%</b></td>
+                      <td className="mono">{d.hbm_hits.toLocaleString()} / {d.hbm_queries.toLocaleString()}</td>
+                      <td><b style={{ color: EXT }}>{(d.ext_hit_rate * 100).toFixed(1)}%</b></td>
+                      <td className="mono">{d.ext_hits.toLocaleString()} / {d.ext_queries.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                  {!Object.keys(phaseRate?.per_dp ?? {}).length && (
+                    <tr><td colSpan={5} className="muted">等待阶段完成…</td></tr>)}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+    </>
+  );
+}

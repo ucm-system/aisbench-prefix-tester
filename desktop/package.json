@@ -1,0 +1,62 @@
+{
+  "name": "aisbench-prefix-tester",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AISBench Prefix Cache performance tester — desktop app",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "electron:dev": "cross-env ELECTRON_START_URL=http://localhost:5173 electron .",
+    "electron:start": "electron .",
+    "sidecar:dev": "py -3.11 -m app.main --port-file ../desktop/.sidecar-dev.json"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.0.0",
+    "electron-builder": "^26.15.3",
+    "typescript": "^5.5.0",
+    "vite": "^6.0.0"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "build": {
+    "appId": "com.dxlong.aisbench-prefix-tester",
+    "productName": "AISBenchPrefixTester",
+    "directories": {
+      "output": "D:\\pt-release"
+    },
+    "files": [
+      "dist/**",
+      "electron/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../sidecar/dist/aisbench-sidecar",
+        "to": "sidecar"
+      },
+      {
+        "from": "dist",
+        "to": "ui"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "AISBenchPrefixTester-Portable.exe"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+# python
+__pycache__/
+*.pyc
+sidecar/dist/
+sidecar/build/
+sidecar/*.spec.bak
+
+# node / electron
+desktop/node_modules/
+desktop/dist/
+desktop/release/
+desktop/.sidecar-dev.json
+desktop/.demo-runs.json
+desktop/*.log
+
+# local test artifacts
+.realtest/
+.realtest-home/
+*.b64
+*.tgz
+tools/tests/tmp/
+.playwright-mcp/
+
+# env
+.env
+assets/
+ui-*.png
+*.log
