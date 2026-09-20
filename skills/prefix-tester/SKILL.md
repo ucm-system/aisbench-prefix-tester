@@ -54,8 +54,28 @@ $PT sla --host HOST --port 8102 --ttft-p90 3000 --tpot-avg 50 --start 8 --max 12
 
 ```
 POST /api/runs {config, name}          GET /api/runs/{id}       POST /api/runs/{id}/stop
-POST /api/probe {host, port}           GET  /api/runs/{id}/metrics
-POST /api/compare {run_ids[]}          POST /api/compare/export?format=html&run_ids=...&token=
+GET  /api/runs?kind=manual|sla&q=      GET  /api/runs/active    GET /api/runs/{id}/logs?tail=N
+POST /api/runs/delete-batch {run_ids}  DELETE /api/runs/{id}    GET  /api/runs/{id}/metrics
+POST /api/probe {host, port}           PUT  /api/settings {k:v}（白名单键）
+POST /api/compare {run_ids[], exclude_warmup, exclude_practice}
+GET  /api/compare/export?format=html&run_ids=...&exclude_practice=...&token=
 POST /api/sla/start {config, sla, start_concurrency, max_concurrency}   GET /api/sla/{job}
+GET  /api/sla/jobs（历史，含 interrupted 标记）   GET /api/sla/current（页面恢复用）
 WS   /ws/runs/{run_id}?token=          事件: status/log/metrics/phase_rate/result/warning
 ```
+
+## 自包含模式（打包 exe）
+
+冻结 exe 零配置：`aisbench_command`/`work_path` 不需要设置（遗留值自动归一为内置 ais_bench 自引用）。
+`/api/health` 返回 `runtime: frozen|source`；`/api/diagnosis` 在 frozen 下报告内置运行时就绪项。
+便携版端口文件：`%USERPROFILE%\AISBenchPrefixTester\sidecar.port`。
+
+## SLA 语义补充
+
+- 阈值键：`<metric>_<stat>`（ttft/tpot/e2el × avg/p50/p75/p90/p99/max）+ `throughput_min`；值必须 > 0；
+  同键重复且数值不同、非法键、缺 seed 等必要字段 → 启动即 400。
+- **预检**：start_concurrency > 1 时先打一个 c=1 探针（延迟最易点）——不满足则 job 直接 done/max_ok=0，
+  note 附实测证据（「预检失败：并发=1 即无法满足 SLA…」），不烧阶梯。
+- 探针带 `run_id`（可 `GET /api/runs/{run_id}/logs?tail=120` 跟日志）、`elapsed_s`、命中率；job 历史落库
+  （`/api/sla/jobs`，sidecar 重启后未完成任务标 `interrupted`）。
+- 探针 run 以 `kind="sla"` 入库，`/api/runs?kind=manual` 默认视图不含它们。

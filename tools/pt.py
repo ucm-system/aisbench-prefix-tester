@@ -6,21 +6,32 @@ Usage:
   python pt.py --host 127.0.0.1:8180 --token TOKEN <command> [args]
 
 Commands:
-  health                          sidecar health
+  health                          sidecar health (JSON: version/runtime)
+  diagnosis                       runtime-readiness items (mode/aisbench/tokenizers)
   probe HOST PORT                 probe a vLLM service (models/metrics/UCM)
   run --host H --port P [--key VALUE ...]   start a test run
   wait RUN_ID [TIMEOUT]           block until a run finishes, print result
   runs [STATUS]                   list runs
   show RUN_ID                     run detail (rounds/metrics/hit rates)
+  delete RUN_ID [RUN_ID ...]      delete runs (single/batch, removes outputs)
   compare RUN_ID1 RUN_ID2 [...]   compare runs (JSON)
   export RUN_ID [xlsx|html]       export a report (saves RUN_ID.<fmt> to cwd)
   sla --host H --port P --ttft-p90 2000 [--tpot-avg 50] [--key VALUE ...]
-                                  SLA auto-tune (max concurrency within SLA)
+                                  SLA auto-tune (max concurrency within SLA;
+                                  c=1 preflight rejects unsatisfiable specs)
   sla-wait JOB_ID [TIMEOUT]       block until SLA tuning finishes
 
 Common run/sla --key options: tokenizer input_len output_len data_num
 prefix_num repeat_rate dp seed concurrency pod_info model_name cache_reset
 per_round_seed_offset collection_interval
+
+Notes:
+  - repeat_rate accepts 90 / 90%% / 0.9; seed is required for SLA runs.
+  - SLA keys are metric_stat (e.g. ttft_p90, tpot_avg, e2el_p99,
+    throughput_min); values must be > 0; contradictory or duplicated
+    thresholds are rejected before the search starts.
+  - packaged sidecar (frozen exe) is self-contained: no aisbench_command or
+    work_path settings needed.
 """
 from __future__ import annotations
 
@@ -93,6 +104,8 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("health", "runs", "diagnosis"):
         sub.add_parser(name)
+    sp = sub.add_parser("delete")
+    sp.add_argument("run_ids", nargs="+")
     sp = sub.add_parser("probe"); sp.add_argument("host"); sp.add_argument("port", type=int)
     sp = sub.add_parser("run"); sp.add_argument("--host", dest="tgt_host", required=True)
     sp.add_argument("--port", dest="tgt_port", type=int, required=True)
@@ -130,6 +143,9 @@ def main():
         for r in c.get("/api/runs").json():
             print(r["run_id"], r["status"], r.get("name", ""),
                   json.dumps(r.get("summary") or {}, ensure_ascii=False))
+    elif args.cmd == "delete":
+        r = c.post("/api/runs/delete-batch", json={"run_ids": args.run_ids}).json()
+        print("deleted:", ", ".join(r.get("deleted", [])) or "(none)")
     elif args.cmd == "run":
         cfg = {"host_ip": args.tgt_host, "host_port": args.tgt_port, "rounds": [{}]}
         cfg.update(kv_pairs(args.kv))
