@@ -154,7 +154,10 @@ async def get_settings(authorization: str = Header(default="")):
 @app.put("/api/settings")
 async def put_settings(body: dict, authorization: str = Header(default="")):
     _auth(authorization)
+    allowed = {"aisbench_command", "collection_interval", "work_path", "theme", "language"}
     for k, v in body.items():
+        if k not in allowed:
+            raise HTTPException(status_code=400, detail=f"unknown setting key: {k}")
         store.set_setting(k, str(v))
     return {"ok": True}
 
@@ -205,17 +208,22 @@ async def tokenizers_delete(name: str, authorization: str = Header(default="")):
 @app.post("/api/tokenizers/verify")
 async def tokenizers_verify(body: dict, authorization: str = Header(default="")):
     _auth(authorization)
-    return tokenizer_mgr.verify(body.get("name_or_path", ""))
+    # AutoTokenizer load is seconds of sync CPU/IO — keep the loop free
+    return await asyncio.to_thread(tokenizer_mgr.verify, body.get("name_or_path", ""))
 
 
 # --------------------------------------------------------------------------- datasets
 @app.post("/api/datasets/preview")
 async def datasets_preview(body: DatasetPreviewReq, authorization: str = Header(default="")):
     _auth(authorization)
-    try:
+
+    def _preview() -> dict:
         path = tokenizer_mgr.resolve(body.tokenizer)
         return preview_dataset(path, body.input_len, body.repeat_rate,
                                body.prefix_num, body.seed, body.mode, body.vocab_file)
+
+    try:
+        return await asyncio.to_thread(_preview)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
@@ -335,6 +343,7 @@ def _delete_run_payload(run_id: str) -> None:
     d = store.get_run(run_id)
     if d and d.get("status") == "running":
         runner.stop_run(run_id)
+        runner.wait_stopped(run_id, timeout=20)  # let the runner thread close log handles
     store.delete_run(run_id)
     shutil.rmtree(config.outputs_dir() / run_id, ignore_errors=True)
 
@@ -357,6 +366,17 @@ async def runs_delete_batch(body: DeleteRunsReq, authorization: str = Header(def
             _delete_run_payload(rid)
             deleted.append(rid)
     return {"ok": True, "deleted": deleted}
+
+
+@app.get("/api/runs/active")
+async def runs_active(authorization: str = Header(default="")):
+    """Lightweight poll target for the UI's running-indicator (no rounds join)."""
+    _auth(authorization)
+    for st in ("running", "pending"):
+        rows = store.list_runs(status=st)
+        if rows:
+            return {"run": {"run_id": rows[0]["run_id"], "name": rows[0]["name"]}}
+    return {"run": None}
 
 
 @app.get("/api/runs/{run_id}")
@@ -385,7 +405,11 @@ async def run_patch(run_id: str, body: RunPatchReq, authorization: str = Header(
 async def run_stop(run_id: str, authorization: str = Header(default="")):
     _auth(authorization)
     if not runner.stop_run(run_id):
-        store.update_run(run_id, status="cancelled") if store.get_run(run_id) else None
+        # no live handle: only downgrade a *not-yet-finished* run; never
+        # rewrite the status of completed/failed history (data destruction)
+        run = store.get_run(run_id)
+        if run and run.get("status") in ("pending", "running"):
+            store.update_run(run_id, status="cancelled")
     return {"ok": True}
 
 
@@ -405,6 +429,10 @@ async def run_delete(run_id: str, authorization: str = Header(default="")):
 async def run_logs(run_id: str, stream: str = "stdout", tail: int = 500,
                    authorization: str = Header(default="")):
     _auth(authorization)
+    if stream not in ("stdout", "stderr"):
+        raise HTTPException(status_code=400, detail="stream must be stdout|stderr")
+    if not store.get_run(run_id):
+        raise HTTPException(status_code=404, detail="run not found")
     path = config.outputs_dir() / run_id / f"{stream}.log"
     if not path.exists():
         return {"lines": []}
@@ -511,6 +539,15 @@ class SlaStartReq(BaseModel):
 @app.post("/api/sla/start")
 async def sla_start(body: SlaStartReq, authorization: str = Header(default="")):
     _auth(authorization)
+    try:
+        sla.parse_sla_spec(body.sla)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"非法 SLA 键：{exc}（合法形如 ttft_p90 / tpot_avg / throughput_min）")
+    missing = [k for k in ("host_ip", "host_port", "input_len", "data_num",
+                           "prefix_num", "repeat_rate", "seed", "dp")
+               if body.config.get(k) in (None, "")]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"SLA 配置缺少必要字段: {', '.join(missing)}")
     job_id = sla.start_job(body.config, body.sla, body.start_concurrency,
                            body.max_concurrency, asyncio.get_running_loop())
     return {"job_id": job_id}
@@ -707,7 +744,11 @@ async def diagnosis(authorization: str = Header(default="")):
 @app.get("/api/boot")
 async def boot():
     """Same-origin bootstrap for container deployments where the UI is served
-    by this sidecar: returns the bearer token to the already-trusted client."""
+    by this sidecar: returns the bearer token to the already-trusted client.
+    Gated on container mode — the desktop/dev flows get the token over IPC
+    or the vite dev plugin and must never expose it unauthenticated."""
+    if not os.environ.get("PT_UI_DIR"):
+        raise HTTPException(status_code=404, detail="boot only in container mode")
     return {"port": _state.get("public_port") or 0, "token": _state["token"],
             "same_origin": True}
 

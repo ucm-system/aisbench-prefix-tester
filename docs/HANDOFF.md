@@ -108,6 +108,30 @@
 
 验证：`tools/tests/test_features.py` 新增 store kinds/delete/sla-jobs 用例，全绿；API 层冒烟（kind 过滤、单条/批量删除、SLA 路由）通过；`npm run build` 通过。
 
+### 第三轮（4 子代理试用审查 + 测试加固，同日深夜）
+
+4 个子代理分别完成：API 全流程实操（真实跑 4 run + 3 SLA job + 导出/删除/异常路径）、前端 UX 审查（18 条）、后端健壮性审查（P0×1+P1×6+P2×10）、测试缺口分析（24 项方案）。
+
+**已修复**（本轮）：
+- runner 源码模式 P0 回归（`aisbench_args` 未绑定，config-dir 重构遗留）——API 测试套件抓到。
+- `parse_aisbench_log`/metrics NaN 值污染采样与时序 JSONL（`math.isfinite` 过滤）。
+- MonitorPage WS 生命周期（cleanup 曾注册在 `.then` 里永不执行 → 连接泄漏+跨 run 数据污染）、状态中文化、日志尾部回填（`/logs?tail=500`）、not_found 提示、failed 相位标红。
+- SlaPage 轮询 404 防护（sidecar 重启后幽灵 job 卡死）、SLA 条件空值启动校验、图表 0 基线、取消/恢复文案。
+- HistoryPage 轮询竞态（reqId 版本号）、选中集 prune、批量删除真实计数、离线空态区分、详情打开容错。
+- 导出口径：`exclude_practice` 贯通 GET /api/compare/export 与 report.export_*。
+- `POST /api/runs/{id}/stop` 不再把 completed/failed 历史改写成 cancelled；删除重复注册的旧 DELETE 路由。
+- `sla_start` 非法键/缺字段 → 400（原 500/假成功）；`parse_sla_spec` 兼容 `_ms` 后缀（pt.py 键名失配修复的另一半）；SLA 探针 run 名不再悬挂「·」。
+- `finished_at` 落库（原永远 null）；`get_rounds` 按插入序（原 full 排在 warmup 前）。
+- 子进程强制 `PYTHONIOENCODING=utf-8`（修 GBK 日志 8456 个 U+FFFD 乱码）+ 剥离 ANSI 转义。
+- `_run_phase` try/finally：异常路径杀子进程树+关句柄（原会泄漏孤儿压测进程）；`RunHandle.finished` + 删除 run 前等待线程收尾。
+- events 队列满改丢最旧（原丢最新，可能丢终态 status）。
+- 安全：`/api/boot` 仅容器模式（PT_UI_DIR）暴露；settings 键白名单；logs 接口 stream 白名单+run_id 存在性校验（路径遍历）；`/api/runs/active` 轻端点（顶栏芯片轮询不再全量拉 runs）。
+- validate_config 类型异常 500→400；导出/预览/verify 等重活 `asyncio.to_thread`（不再冻结事件循环）。
+- pt.py：UTF-8 控制台（GBK 崩溃修复）、sla 键名、export 落盘 `RUN_ID.<fmt>`、wait/sla-wait 位置 TIMEOUT、health JSON。
+- 测试：新增 `tools/tests/test_api.py`（14 用例 TestClient 回归，含 stub 命令驱动 run 成功/失败全生命周期）+ `test_features.py` 扩至 18 用例（metrics 差分、真实日志解析、SLA 判定矩阵、真实 tokenizer 数据集生成、CSV 表头合并等）；`tools/tests/stub_aisbench.py` 桩命令。
+
+**遗留 backlog**（按优先级，均已有修复方案在审查报告中）：① `/api/boot`+CORS 完整加固（已做容器门控，CORS `*` 与 `?token=` 留痕待 ticket 化）；② 源码模式共享 workspace 并发串写（模块互斥锁或全模式 config-dir 统一，需真跑 ais_bench 验证）；③ export/compare/logs 大文件同步读改 to_thread/流式；④ metrics 字段语义（`total_input_tokens` 实为均值、-1 哨兵改 null、max_concurrency 类型）；⑤ warmup 退出码忽略导致脏指标入库；⑥ store 异常回滚统一化；⑦ datasets/outputs 保留策略；⑧ compare missing_rounds 用 len 而非最大轮号的口径；⑨ 键盘可达性/aria。
+
 ### 第二轮（导航重构，同日）
 
 6. **运行监控不再是独立页签**：侧栏移除「运行监控」「数据集」两项；监控改为跳转式进入——新建测试点「开始测试」后自动跳 `/monitor/<run_id>`（原有逻辑），运行记录每行有「监控」按钮；另在顶栏加全局「● 运行中 <名称>」芯片（5s 轮询，有存活 run 才显示），点击回到实时监控，切走后不会找不到正在跑的任务。默认落地页从 monitor 改为 config；旧 `#/datasets` hash 自动重定向到 `/config`。

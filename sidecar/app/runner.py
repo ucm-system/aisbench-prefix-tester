@@ -13,6 +13,7 @@ import copy
 import json
 import logging
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -58,6 +59,7 @@ class RunHandle:
         self.run_id = run_id
         self.loop = loop
         self.cancelled = threading.Event()
+        self.finished = threading.Event()
         self.proc: Optional[subprocess.Popen] = None
         self.thread: Optional[threading.Thread] = None
         self.phase = ""
@@ -67,6 +69,14 @@ class RunHandle:
 
 def get_active(run_id: str) -> Optional[RunHandle]:
     return _active.get(run_id)
+
+
+def wait_stopped(run_id: str, timeout: float = 20) -> None:
+    """Block until the runner thread for run_id has fully wound down (log
+    handles closed) so callers can safely delete its artifacts."""
+    handle = _active.get(run_id)
+    if handle and handle.thread:
+        handle.finished.wait(timeout=timeout)
 
 
 def start_run(run_id: str, loop: asyncio.AbstractEventLoop) -> None:
@@ -104,7 +114,10 @@ def _kill_tree(proc: Optional[subprocess.Popen]) -> None:
 
 
 def _status(handle: RunHandle, status: str, **extra) -> None:
-    store.update_run(handle.run_id, status=status)
+    fields: dict = {"status": status}
+    if status in ("completed", "failed", "cancelled"):
+        fields["finished_at"] = time.time()
+    store.update_run(handle.run_id, **fields)
     events.publish(handle.run_id, "status", status=status,
                    round=handle.round_index, total_rounds=handle.total_rounds,
                    phase=handle.phase, **extra)
@@ -324,6 +337,7 @@ def _execute(handle: RunHandle) -> None:
         events.publish(run_id, "log", stream="stderr", line=f"runner error: {exc}")
         _status(handle, "failed", error=str(exc)[:300])
     finally:
+        handle.finished.set()
         _sync_await(collector.stop())
         stdout_log.close()
         stderr_log.close()
@@ -413,6 +427,9 @@ def _run_phase(handle: RunHandle, command: str, args: list[str],
         argv = shlex.split(command, posix=False) + args if command else args
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    # ais_bench tables/中文 come out in the child's console encoding on Windows;
+    # force UTF-8 so our utf-8 decode never produces U+FFFD mojibake
+    env["PYTHONIOENCODING"] = "utf-8"
     env["AISBENCH_PT_WORK"] = work_path  # workspace root (mock_aisbench reads it)
     # benchmark traffic must reach the service directly: kill proxy env vars and
     # the Windows registry proxy that requests/urllib would otherwise honor
@@ -431,33 +448,43 @@ def _run_phase(handle: RunHandle, command: str, args: list[str],
     # consumes this file after each phase
     aisbench_log = open(config.outputs_dir() / handle.run_id / "aisbench.log",
                         "a", encoding="utf-8")
-    handle.proc = subprocess.Popen(
-        argv, cwd=str(config.outputs_dir() / handle.run_id), env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        encoding="utf-8", errors="replace", bufsize=1)
-    assert handle.proc.stdout is not None
-    pyi_error = False
-    for line in handle.proc.stdout:
-        if not pyi_error and "PYI-" in line and "ERROR" in line:
-            # PyInstaller bootstrap crash inside a re-invoked child (e.g. task
-            # script re-entered the exe). Some wrappers still exit 0, so this
-            # must never be reported as a successful phase (mock false positive).
-            pyi_error = True
-        stdout_log.write(line)
-        aisbench_log.write(line)
-        stdout_log.flush()
-        aisbench_log.flush()
-        events.publish_log(handle.run_id, "stdout", line)
-    ret = handle.proc.wait()
-    handle.proc = None
-    aisbench_log.close()
-    if pyi_error:
-        stderr_log.write("[PYI-ERROR in child output; phase marked failed]\n")
-        stderr_log.flush()
-        events.publish(handle.run_id, "log", stream="stderr",
-                       line="PyInstaller bootstrap error in AISBench output; marking phase failed")
-        ret = ret or 1
-    if ret != 0:
-        stderr_log.write(f"[exit {ret}]\n")
-        stderr_log.flush()
-    return ret
+    ret = -1
+    try:
+        handle.proc = subprocess.Popen(
+            argv, cwd=str(config.outputs_dir() / handle.run_id), env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            encoding="utf-8", errors="replace", bufsize=1)
+        assert handle.proc.stdout is not None
+        pyi_error = False
+        _ansi_re = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07")
+        for line in handle.proc.stdout:
+            line = _ansi_re.sub("", line)
+            if not pyi_error and "PYI-" in line and "ERROR" in line:
+                # PyInstaller bootstrap crash inside a re-invoked child (e.g. task
+                # script re-entered the exe). Some wrappers still exit 0, so this
+                # must never be reported as a successful phase (mock false positive).
+                pyi_error = True
+            stdout_log.write(line)
+            aisbench_log.write(line)
+            stdout_log.flush()
+            aisbench_log.flush()
+            events.publish_log(handle.run_id, "stdout", line)
+        ret = handle.proc.wait()
+        if pyi_error:
+            stderr_log.write("[PYI-ERROR in child output; phase marked failed]\n")
+            stderr_log.flush()
+            events.publish(handle.run_id, "log", stream="stderr",
+                           line="PyInstaller bootstrap error in AISBench output; marking phase failed")
+            ret = ret or 1
+        return ret
+    finally:
+        # never leak a benchmark subprocess or the log handle, whatever happens
+        proc, handle.proc = handle.proc, None
+        if proc is not None and proc.poll() is None:
+            _kill_tree(proc)
+        try:
+            if proc is not None:
+                proc.wait(timeout=10)
+        except Exception:  # noqa: BLE001
+            pass
+        aisbench_log.close()

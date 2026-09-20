@@ -37,7 +37,10 @@ def sla_label(key: str) -> str:
 
 
 def parse_sla_spec(sla: dict) -> dict:
-    """Normalize {ttft_p90: 3000, throughput_min: 100, ...} → limits dict."""
+    """Normalize {ttft_p90: 3000, throughput_min: 100, ...} → limits dict.
+
+    Tolerates the `ttft_p90_ms` style (trailing `_ms`) that older clients send.
+    """
     out = {}
     for key, value in sla.items():
         if value is None:
@@ -45,10 +48,11 @@ def parse_sla_spec(sla: dict) -> dict:
         if key == "throughput_min":
             out[key] = float(value)
             continue
-        metric, _, stat = key.partition("_")
+        norm = key.removesuffix("_ms")
+        metric, _, stat = norm.partition("_")
         if metric not in SLA_METRICS or stat not in SLA_STATS:
             raise ValueError(f"unknown SLA key: {key}")
-        out[key] = float(value)
+        out[norm] = float(value)
     return out
 
 
@@ -124,7 +128,9 @@ class SlaTuner(threading.Thread):
         if self.dataset_files:
             cfg["dataset_files"] = self.dataset_files
         cfg.pop("rounds", None)
-        run_id = store.create_run(cfg, name=f"SLA c={concurrency} · {self.base_cfg.get('test_name', '')}",
+        run_id = store.create_run(cfg, name=(f"SLA c={concurrency}"
+                                             + (f" · {self.base_cfg.get('test_name')}"
+                                                if self.base_cfg.get('test_name') else "")),
                                   kind="sla")
         runner.start_run(run_id, self.loop)
         while True:
@@ -133,6 +139,10 @@ class SlaTuner(threading.Thread):
                 return {"concurrency": concurrency, "ok": False, "run_id": run_id,
                         "state": "cancelled"}
             d = store.get_run(run_id)
+            if d is None:
+                # run deleted under us → treat as interrupted
+                return {"concurrency": concurrency, "ok": False, "run_id": run_id,
+                        "state": "cancelled", "reason": "run deleted"}
             if d["status"] in ("completed", "failed", "cancelled"):
                 break
             time.sleep(2)

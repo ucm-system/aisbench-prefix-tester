@@ -156,6 +156,45 @@ def test_sla_routes_empty():
     print("sla routes OK")
 
 
+def test_sla_start_validation():
+    """Invalid SLA keys and missing config fields must be 400s, not 500s/ghost jobs."""
+    bad = c.post("/api/sla/start", headers=H,
+                 json={"config": {"host_ip": "h", "host_port": 1, "seed": 1,
+                                  "input_len": 1, "data_num": 1, "prefix_num": 1,
+                                  "repeat_rate": "0.9", "dp": 1},
+                       "sla": {"latency_p90": 5}})
+    assert bad.status_code == 400 and "SLA" in bad.json()["detail"], bad.text
+    cfg = {"host_ip": "h", "host_port": 1, "input_len": 1, "data_num": 1,
+           "prefix_num": 1, "repeat_rate": "0.9", "dp": 1}
+    bad2 = c.post("/api/sla/start", headers=H,
+                  json={"config": cfg, "sla": {"ttft_p90": 5}})
+    assert bad2.status_code == 400 and "seed" in bad2.json()["detail"], bad2.text
+    print("sla start validation OK")
+
+
+def test_runs_active_and_settings_whitelist():
+    a = c.get("/api/runs/active", headers=H).json()
+    assert "run" in a  # None or an active run — shape pin for the UI chip
+    r = c.put("/api/settings", headers=H, json={"evil_key": "x"})
+    assert r.status_code == 400, r.status_code
+    print("runs/active + settings whitelist OK")
+
+
+def test_stop_never_rewrites_history():
+    rid = store.create_run({"host_ip": "h", "host_port": 1})
+    store.update_run(rid, status="completed")
+    c.post(f"/api/runs/{rid}/stop", headers=H)
+    assert store.get_run(rid)["status"] == "completed", "stop must not rewrite history"
+    store.delete_run(rid)
+    print("stop history guard OK")
+
+
+def test_parse_sla_ms_suffix():
+    from app.sla import parse_sla_spec
+    assert parse_sla_spec({"ttft_p90_ms": 3000}) == {"ttft_p90": 3000.0}
+    print("sla _ms suffix tolerance OK")
+
+
 def test_datasets_preview():
     r = c.post("/api/datasets/preview", headers=H,
                json={"tokenizer": TOK_PATH, "input_len": 32,
@@ -184,6 +223,10 @@ def main():
         test_run_lifecycle_failed()
         test_kind_filter_and_delete()
         test_sla_routes_empty()
+        test_sla_start_validation()
+        test_runs_active_and_settings_whitelist()
+        test_stop_never_rewrites_history()
+        test_parse_sla_ms_suffix()
         test_datasets_preview()
         test_run_detail_404()
     print("ALL API TESTS PASSED")

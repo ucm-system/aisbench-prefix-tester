@@ -61,9 +61,8 @@ export default function App() {
     if (!ready) return;
     const tick = async () => {
       try {
-        const rs = await api.get<{ run_id: string; status: string; name: string }[]>("/api/runs");
-        const act = rs.find((r) => r.status === "running" || r.status === "pending");
-        setActiveRun(act ? { run_id: act.run_id, name: act.name || act.run_id } : null);
+        const r = await api.get<{ run: { run_id: string; name: string } | null }>("/api/runs/active");
+        setActiveRun(r.run);
       } catch { /* sidecar offline */ }
     };
     tick();

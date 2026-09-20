@@ -38,7 +38,13 @@ def _put(q: asyncio.Queue, item: dict) -> None:
     try:
         q.put_nowait(item)
     except asyncio.QueueFull:
-        pass  # drop oldest-pressure events rather than block the runner
+        # slow consumer: drop the OLDEST queued event and keep the newest one
+        # (dropping the newest could lose a terminal status=completed/failed)
+        try:
+            q.get_nowait()
+            q.put_nowait(item)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def publish(channel: str, etype: str, **data: Any) -> None:

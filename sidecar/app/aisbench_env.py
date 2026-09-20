@@ -83,10 +83,25 @@ def write_model_config(
 
     lines = TEMPLATE_PATH.read_text(encoding="utf-8").splitlines(keepends=True)
     out_lines = []
+    # placeholders sitting inside double quotes need a valid Python *string
+    # literal* (escaped backslashes/quotes); unquoted numeric placeholders get
+    # plain digits; test_type is a class identifier. re.sub was wrong here: its
+    # replacement semantics ate one escaping layer and corrupted Windows paths.
+    quoted = {"model_path_for_replace", "model_name_for_replace", "ip_for_replace",
+              "url_for_replace", "api_key_for_replace", "test_abbr_for_replace"}
     for line in lines:
         t = line
         for key, value in replacements.items():
-            t = re.sub(key, value.replace("\\", "\\\\"), t)
+            if key == "test_type_for_replace":
+                if not re.fullmatch(r"[A-Za-z_]\w*", str(value)):
+                    raise ValueError(f"invalid test_type: {value!r}")
+                t = t.replace(key, str(value))
+            elif key in quoted:
+                v = (str(value).replace("\\", "\\\\").replace('"', '\\"')
+                     .replace("\n", "\\n").replace("\r", "\\r"))
+                t = t.replace(key, v)
+            else:
+                t = t.replace(key, str(value))
         out_lines.append(t)
 
     cfg_dir, _ = prepare_workspace(work_path)

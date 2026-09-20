@@ -13,7 +13,7 @@ Commands:
   runs [STATUS]                   list runs
   show RUN_ID                     run detail (rounds/metrics/hit rates)
   compare RUN_ID1 RUN_ID2 [...]   compare runs (JSON)
-  export RUN_ID [xlsx|html]       export a report
+  export RUN_ID [xlsx|html]       export a report (saves RUN_ID.<fmt> to cwd)
   sla --host H --port P --ttft-p90 2000 [--tpot-avg 50] [--key VALUE ...]
                                   SLA auto-tune (max concurrency within SLA)
   sla-wait JOB_ID [TIMEOUT]       block until SLA tuning finishes
@@ -31,6 +31,11 @@ import time
 from pathlib import Path
 
 import httpx
+
+# GBK consoles (default zh-CN Windows) crash on ✓/✗ in diagnosis output
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 INT_KEYS = {"host_port", "input_len", "output_len", "data_num", "prefix_num",
             "dp", "seed", "concurrency", "request_rate", "npu_num",
@@ -93,7 +98,9 @@ def main():
     sp.add_argument("--port", dest="tgt_port", type=int, required=True)
     sp.add_argument("--name", default=""); sp.add_argument("--wait", action="store_true")
     sp.add_argument("kv", nargs="*", help="key=value pairs")
-    sub.add_parser("wait").add_argument("run_id")
+    wp = sub.add_parser("wait")
+    wp.add_argument("run_id")
+    wp.add_argument("timeout_pos", nargs="?", type=int, default=None)
     sub.add_parser("show").add_argument("run_id")
     sub.add_parser("compare").add_argument("run_ids", nargs="+")
     sp = sub.add_parser("export"); sp.add_argument("run_id"); sp.add_argument("fmt", nargs="?", default="xlsx")
@@ -104,12 +111,15 @@ def main():
     sp.add_argument("--start", type=int, default=4)
     sp.add_argument("--max", type=int, default=128)
     sp.add_argument("kv", nargs="*", help="key=value pairs (dataset config)")
-    sub.add_parser("sla-wait").add_argument("job_id")
+    sw = sub.add_parser("sla-wait")
+    sw.add_argument("job_id")
+    sw.add_argument("timeout_pos", nargs="?", type=int, default=None)
     args = ap.parse_args()
 
     c = client(args)
+    wait_timeout = getattr(args, "timeout_pos", None) or args.timeout
     if args.cmd == "health":
-        print(c.get("/api/health").json())
+        print(json.dumps(c.get("/api/health").json(), ensure_ascii=False))
     elif args.cmd == "diagnosis":
         for i in c.get("/api/diagnosis").json()["items"]:
             print(("OK  " if i["ok"] else "FAIL"), i["name"], "-", i["detail"])
@@ -133,7 +143,7 @@ def main():
         else:
             print(rid)
     elif args.cmd == "wait":
-        print_run(wait_run(c, args.run_id, args.timeout))
+        print_run(wait_run(c, args.run_id, wait_timeout))
     elif args.cmd == "show":
         print(json.dumps(c.get(f"/api/runs/{args.run_id}").json(), ensure_ascii=False, indent=2, default=str))
     elif args.cmd == "compare":
@@ -141,7 +151,13 @@ def main():
                          ensure_ascii=False, indent=2, default=str))
     elif args.cmd == "export":
         r = c.get(f"/api/runs/{args.run_id}/export?format={args.fmt}")
-        print(json.dumps(r.json(), ensure_ascii=False) if r.headers.get("content-type", "").startswith("application/json") else r.status_code)
+        ct = r.headers.get("content-type", "")
+        if ct.startswith("application/json"):
+            print(json.dumps(r.json(), ensure_ascii=False, indent=2))
+        else:
+            out = Path(f"{args.run_id}.{args.fmt}")
+            out.write_bytes(r.content)
+            print(f"saved {out} ({len(r.content)} bytes)")
     elif args.cmd == "sla":
         cfg = {"host_ip": args.tgt_host, "host_port": args.tgt_port, "rounds": [{}]}
         cfg.update(kv_pairs(args.kv))
@@ -149,8 +165,8 @@ def main():
         if isinstance(pod, str):
             cfg["pod_info"] = [x for x in pod.replace(";", ",").split(",") if x]
         sla = {}
-        if args.ttft_p90: sla["ttft_p90_ms"] = args.ttft_p90
-        if args.tpot_avg: sla["tpot_avg_ms"] = args.tpot_avg
+        if args.ttft_p90: sla["ttft_p90"] = args.ttft_p90
+        if args.tpot_avg: sla["tpot_avg"] = args.tpot_avg
         job = c.post("/api/sla/start", json={"config": cfg, "sla": sla,
                                              "start_concurrency": args.start,
                                              "max_concurrency": args.max}).json()
@@ -164,7 +180,7 @@ def main():
         print(json.dumps(j, ensure_ascii=False, indent=2))
     elif args.cmd == "sla-wait":
         t0 = time.time()
-        while time.time() - t0 < args.timeout:
+        while time.time() - t0 < wait_timeout:
             j = c.get(f"/api/sla/{args.job_id}").json()
             if j["state"] in ("done", "failed", "cancelled"):
                 break

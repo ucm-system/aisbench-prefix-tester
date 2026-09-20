@@ -184,7 +184,7 @@ def upsert_round(run_id: str, round_index: int, phase: str, is_warmup: bool,
 def get_rounds(run_id: str) -> list[dict]:
     with _LOCK:
         rows = connect().execute(
-            "SELECT * FROM rounds WHERE run_id=? ORDER BY round_index, phase", (run_id,)
+            "SELECT * FROM rounds WHERE run_id=? ORDER BY id", (run_id,)
         ).fetchall()
     out = []
     for row in rows:
