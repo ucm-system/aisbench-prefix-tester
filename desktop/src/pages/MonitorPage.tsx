@@ -34,6 +34,16 @@ export default function MonitorPage({ route }: { route: string }) {
       const rounds: RoundRow[] = d.rounds ?? [];
       const lastFull = [...rounds].reverse().find((r) => r.phase === "full");
       if (lastFull) setPhaseRate({ per_dp: lastFull.hit_rate?.per_dp, agg: lastFull.hit_rate?.aggregated, phase: "full" });
+      // completed runs: replay persisted timeseries so charts still render
+      api.get<{ samples: any[] }>(`/api/runs/${runId}/metrics`).then((r) => {
+        const flatSamples = (r.samples ?? []).map((s) => ({
+          ts: s.ts,
+          flat: Object.values(s.engines ?? {}).reduce<Record<string, number>>(
+            (acc, counters: any) => ({ ...acc, ...counters }), {}),
+        }));
+        setSamples(flatSamples);
+        if (flatSamples.length && flatSamples[0].flat._ucm_seen) setUcm(true);
+      }).catch(() => {});
       if (d.status === "running" || d.status === "pending") {
         const ws = wsRun(runId);
         ws.onmessage = (m) => {
@@ -71,10 +81,14 @@ export default function MonitorPage({ route }: { route: string }) {
 
   // sliding-window hit rates from consecutive samples
   const trend = useMemo(() => {
-    const hbm: number[] = [], ext: number[] = [], comp: number[] = [], run: number[] = [];
+    const hbm: number[] = [], ext: number[] = [], comp: number[] = [];
+    const run: number[] = [], wait: number[] = [], kv: number[] = [];
+    const genRate: number[] = [], promptRate: number[] = [], ttftT: number[] = [];
     let prev = samples[0]?.flat;
+    let prevTs = samples[0]?.ts;
     for (const s of samples) {
       const f = s.flat;
+      const dt = prev && prevTs != null ? Math.max(0.001, s.ts - prevTs) : 1;
       const dq = prev ? f.hbm_q - prev.hbm_q : 0;
       const deq = prev ? f.ext_q - prev.ext_q : 0;
       const hr = dq > 0 ? (f.hbm_h - prev.hbm_h) / dq : null;
@@ -83,13 +97,28 @@ export default function MonitorPage({ route }: { route: string }) {
       ext.push(er == null ? NaN : er * 100);
       comp.push(hr != null && er != null ? (er * (1 - hr) + hr) * 100 : NaN);
       run.push(f.running ?? 0);
-      prev = f;
+      wait.push(f.waiting ?? 0);
+      kv.push((f.kv_usage ?? 0) * 100);
+      genRate.push(prev ? Math.max(0, (f.gen_tok - prev.gen_tok) / dt) : 0);
+      promptRate.push(prev ? Math.max(0, (f.prompt_tok - prev.prompt_tok) / dt) : 0);
+      const dc = prev ? f.ttft_cnt - prev.ttft_cnt : 0;
+      ttftT.push(dc > 0 ? ((f.ttft_sum - prev.ttft_sum) / dc) * 1000 : NaN);
+      prev = f; prevTs = s.ts;
     }
     const clean = (a: number[]) => a.map((v) => (Number.isFinite(v) ? v : 0));
-    return { hbm: clean(hbm), ext: clean(ext), comp: clean(comp), run: clean(run) };
+    return { hbm: clean(hbm), ext: clean(ext), comp: clean(comp),
+             run: clean(run), wait: clean(wait), kv: clean(kv),
+             genRate: clean(genRate), promptRate: clean(promptRate), ttftT: clean(ttftT) };
   }, [samples]);
 
   const latest = samples[samples.length - 1]?.flat ?? {};
+  const genThr = samples.length > 1 ? genRateOf(samples) : 0;
+  function genRateOf(sams: { ts: number; flat: Record<string, number> }[]) {
+    if (sams.length < 2) return 0;
+    const a = sams[sams.length - 2], b = sams[sams.length - 1];
+    const dt = b.ts - a.ts;
+    return dt > 0 ? Math.max(0, (b.flat.gen_tok - a.flat.gen_tok) / dt) : 0;
+  }
   const agg = phaseRate?.agg ?? {};
   const ttft = latest.ttft_cnt ? (latest.ttft_sum / latest.ttft_cnt) * 1000 : (detail ? (detail.rounds ?? []).filter((r: any) => r.phase === "full").at(-1)?.metrics?.ttft_avg_ms ?? 0 : 0);
 
@@ -143,7 +172,7 @@ export default function MonitorPage({ route }: { route: string }) {
             </div>
           </div>
 
-          <div className="metric-cards">
+          <div className="metric-cards" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
             {card(<span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: HBM, marginRight: 6 }} />HBM 命中率</span>,
               `${((agg.hbm_hit_rate ?? 0) * 100).toFixed(1)}%`, "阶段快照差分", HBM, (agg.hbm_hit_rate ?? 0) * 100)}
             {card(<span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: EXT, marginRight: 6 }} />Ext 命中率</span>,
@@ -151,8 +180,46 @@ export default function MonitorPage({ route }: { route: string }) {
             {card(<span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: UCMC, marginRight: 6 }} />综合命中率</span>,
               `${(((agg.ext_hit_rate ?? 0) * (1 - (agg.hbm_hit_rate ?? 0)) + (agg.hbm_hit_rate ?? 0)) * 100).toFixed(1)}%`, "ext×(1−hbm)+hbm", UCMC,
               ((agg.ext_hit_rate ?? 0) * (1 - (agg.hbm_hit_rate ?? 0)) + (agg.hbm_hit_rate ?? 0)) * 100)}
-            {card("已完成请求", `${Math.round(latest.success ?? 0)}`, `running ${Math.round(latest.running ?? 0)} · waiting ${Math.round(latest.waiting ?? 0)}`)}
-            {card("avg TTFT", `${ttft.toFixed(0)}ms`, `采样 ${samples.length} 次`)}
+            {card("当前并发 running", `${Math.round(latest.running ?? 0)}`, `waiting ${Math.round(latest.waiting ?? 0)} · swapped ${Math.round(latest.swapped ?? 0)}`)}
+            {card("等待队列", `${Math.round(latest.waiting ?? 0)}`, "scheduler queue")}
+            {card("KV Cache 利用率", `${((latest.kv_usage ?? 0) * 100).toFixed(0)}%`, "GPU KV 占用", "#e2a336", (latest.kv_usage ?? 0) * 100)}
+            {card("avg TTFT", `${ttft.toFixed(0)}ms`, `P90 前缀缓存探测`)}
+            {card("输出吞吐", `${genThr.toFixed(0)}`, "tok/s（滑动窗）")}
+          </div>
+
+          <div className="monitor-grid">
+            <div className="card">
+              <div className="chart-head"><b>请求状态 / KV 占用</b>
+                <div className="legend">
+                  <span><i style={{ background: "#8ab4ff" }} />running</span>
+                  <span><i style={{ background: "#f0be63" }} />waiting</span>
+                  <span className="dashed" style={{ color: "#13c2c2" }}><i />KV %</span>
+                </div>
+              </div>
+              {samples.length > 1
+                ? <LineChart yMax={Math.max(10, ...trend.run, ...trend.wait, ...trend.kv)} height={170}
+                    fmt={(v) => String(Math.round(v))}
+                    series={[
+                      { data: trend.run, color: "#8ab4ff" },
+                      { data: trend.wait, color: "#f0be63" },
+                      { data: trend.kv, color: "#13c2c2", dash: true }]} />
+                : <div className="subnote">等待指标采样…</div>}
+            </div>
+            <div className="card">
+              <div className="chart-head"><b>吞吐 (tok/s，滑动窗)</b>
+                <div className="legend">
+                  <span><i style={{ background: "#10a37f" }} />输出</span>
+                  <span><i style={{ background: "#9254de" }} />输入</span>
+                </div>
+              </div>
+              {samples.length > 1
+                ? <LineChart yMax={Math.max(10, ...trend.genRate, ...trend.promptRate)} height={170}
+                    fmt={(v) => String(Math.round(v))}
+                    series={[
+                      { data: trend.genRate, color: "#10a37f", area: true },
+                      { data: trend.promptRate, color: "#9254de" }]} />
+                : <div className="subnote">等待指标采样…</div>}
+            </div>
           </div>
 
           <div className="monitor-grid">
