@@ -195,18 +195,19 @@ def _execute(handle: RunHandle) -> None:
         return _sync_await(collector.snapshot())
 
     handle.total_rounds = len(cfg["rounds"])
-    # AISBench workspace. When `work_path` is configured (pip-installed
-    # ais_bench -> site-packages root), configs/datasets must be written into
-    # the package itself for name-based resolution, so no per-run subdir.
-    # Otherwise (mock/dev), isolate per run to avoid clobbering.
+    # Resolve how ais_bench is executed ONCE per run. Frozen (packaged) builds
+    # are self-contained: the default re-enters the exe itself (--child-aisbench)
+    # and needs no external Python/pip environment. Source/dev mode uses the
+    # external CLI (or mock) named by the aisbench_command setting.
+    argv_prefix, child_mode = resolve_command(store.get_setting("aisbench_command", ""))
+    # AISBench workspace. Only the (source-mode) name-resolution flow needs a
+    # package workspace; child/config-dir mode keeps everything per-run.
     wp_setting = store.get_setting("work_path", "")
-    child_mode = _is_child_mode(store.get_setting("aisbench_command", ""))
     work_path = (wp_setting if wp_setting else str(config.work_path() / run_id))
     run_work = str(Path(work_path) / run_id) if wp_setting else work_path
     try:
         _sync_await(collector.start())
         _status(handle, "running")
-        settings_cmd = store.get_setting("aisbench_command", "ais_bench")
         run_failed = False
 
         for round_index, overrides in enumerate(cfg["rounds"], start=1):
@@ -232,7 +233,6 @@ def _execute(handle: RunHandle) -> None:
             dataset = _ensure_dataset(handle, rc, cfg, str(run_dir))
             prefix_file, data_file = dataset["prefix_path"], dataset["dataset_path"]
 
-            child_mode = _is_child_mode(settings_cmd)
             pt_configs = run_dir / "pt_configs"
             (pt_configs / "models").mkdir(parents=True, exist_ok=True)
             # child mode resolves configs via --config-dir (pt_configs);
@@ -269,7 +269,7 @@ def _execute(handle: RunHandle) -> None:
                 aisbench_args = aisbench_env.build_aisbench_command(
                     cfg["summarizer"], str(run_dir / "results"))
             before = collector_snapshot()
-            ret = _run_phase(handle, settings_cmd, aisbench_args, stdout_log, stderr_log, work_path)
+            ret = _run_phase(handle, argv_prefix, aisbench_args, stdout_log, stderr_log, work_path)
             after = collector_snapshot()
             rate = metrics.compute_hit_rate(before, after)
             events.publish(run_id, "phase_rate", round=round_index, phase="warmup", rate=rate)
@@ -306,7 +306,7 @@ def _execute(handle: RunHandle) -> None:
                 ds_cfg_out.parent.mkdir(parents=True, exist_ok=True)
                 aisbench_env.write_dataset_config(ds_link or data_file, str(ds_cfg_out))
             before = collector_snapshot()
-            ret = _run_phase(handle, settings_cmd, aisbench_args, stdout_log, stderr_log, work_path)
+            ret = _run_phase(handle, argv_prefix, aisbench_args, stdout_log, stderr_log, work_path)
             if ret != 0 and not handle.cancelled.is_set():
                 _status(handle, "failed", exit_code=ret)
                 events.publish(run_id, "log", stream="stderr",
@@ -346,8 +346,32 @@ def _execute(handle: RunHandle) -> None:
             _active.pop(run_id, None)
 
 
-def _is_child_mode(settings_cmd: str) -> bool:
-    return "--child-aisbench" in (settings_cmd or "")
+def resolve_command(settings_cmd: str | None,
+                    frozen: bool | None = None) -> tuple[list[str], bool]:
+    """Resolve how ais_bench is executed → (argv_prefix, child_mode).
+
+    frozen=True (packaged builds) is SELF-CONTAINED: the default — unset, the
+    legacy "ais_bench" value, or any --child-aisbench form — re-enters this exe
+    itself, needing no external Python/pip environment. An explicit custom
+    command (e.g. the mock runner) is still honored. frozen=False (source/dev)
+    keeps using the external CLI named by the setting.
+    """
+    if frozen is None:
+        frozen = getattr(sys, "frozen", False)
+    cmd = (settings_cmd or "").strip()
+    if frozen:
+        if not cmd or cmd == "ais_bench" or "--child-aisbench" in cmd:
+            return [sys.executable, "--child-aisbench"], True
+        try:
+            return shlex.split(cmd, posix=False), "--child-aisbench" in cmd
+        except ValueError:
+            return [sys.executable, "--child-aisbench"], True
+    if not cmd:
+        return ["ais_bench"], False
+    try:
+        return shlex.split(cmd, posix=False), "--child-aisbench" in cmd
+    except ValueError:
+        return ["ais_bench"], False
 
 
 def _merge_round(cfg: dict, overrides: dict) -> dict:
@@ -418,13 +442,9 @@ def _ensure_dataset(handle: RunHandle, rc: dict, cfg: dict, run_dir: str) -> dic
     return result
 
 
-def _run_phase(handle: RunHandle, command: str, args: list[str],
+def _run_phase(handle: RunHandle, argv_prefix: list[str], args: list[str],
                stdout_log, stderr_log, work_path: str) -> int:
-    if command and store.get_setting("aisbench_command") is None and getattr(sys, "frozen", False):
-        # packaged exe: self-reuse to run the bundled ais_bench CLI
-        argv = [sys.executable, "--child-aisbench"] + args
-    else:
-        argv = shlex.split(command, posix=False) + args if command else args
+    argv = argv_prefix + args
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     # ais_bench tables/中文 come out in the child's console encoding on Windows;

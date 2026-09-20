@@ -130,6 +130,16 @@
 - pt.py：UTF-8 控制台（GBK 崩溃修复）、sla 键名、export 落盘 `RUN_ID.<fmt>`、wait/sla-wait 位置 TIMEOUT、health JSON。
 - 测试：新增 `tools/tests/test_api.py`（14 用例 TestClient 回归，含 stub 命令驱动 run 成功/失败全生命周期）+ `test_features.py` 扩至 18 用例（metrics 差分、真实日志解析、SLA 判定矩阵、真实 tokenizer 数据集生成、CSV 表头合并等）；`tools/tests/stub_aisbench.py` 桩命令。
 
+### 第四轮（自包含运行时，同日）
+
+**架构决策：打包 exe 即唯一运行时，不再依赖外部 Python/pip 环境。**
+
+- `runner.resolve_command(cmd, frozen)`：冻结模式默认（未设置 / 遗留值 `ais_bench` / 任意 `--child-aisbench` 形态）一律自引用 `exe --child-aisbench`（config-dir 流程），彻底摆脱外部 ais_bench 与 work_path；显式自定义命令（如 mock）仍被尊重。源码/开发模式保持外部 CLI。
+- `/api/diagnosis` 重写为**就绪检测**：打包模式报告「自包含打包模式 + 内置 AISBench/Python」，不再探测外部 CLI/pip；work_path 项仅开发模式出现。
+- `/api/health` 增加 `runtime: frozen|source`；设置页据此切换——打包模式隐藏 aisbench_command/work_path 配置（显示「内置自包含」），开发模式保留。
+- 用户旧库中的遗留 `aisbench_command="ais_bench"` 设置在打包模式下会被自动归一到自引用，无需迁移。
+- 打包产物：`assets/model` tokenizer + ais_bench 源码/配置 + 全部 Python 依赖随包（spec 已覆盖），干净机器开箱即用；`sidecar` 仅监听 127.0.0.1 + token，不对外暴露。
+
 **遗留 backlog**（按优先级，均已有修复方案在审查报告中）：① `/api/boot`+CORS 完整加固（已做容器门控，CORS `*` 与 `?token=` 留痕待 ticket 化）；② 源码模式共享 workspace 并发串写（模块互斥锁或全模式 config-dir 统一，需真跑 ais_bench 验证）；③ export/compare/logs 大文件同步读改 to_thread/流式；④ metrics 字段语义（`total_input_tokens` 实为均值、-1 哨兵改 null、max_concurrency 类型）；⑤ warmup 退出码忽略导致脏指标入库；⑥ store 异常回滚统一化；⑦ datasets/outputs 保留策略；⑧ compare missing_rounds 用 len 而非最大轮号的口径；⑨ 键盘可达性/aria。
 
 ### 第二轮（导航重构，同日）

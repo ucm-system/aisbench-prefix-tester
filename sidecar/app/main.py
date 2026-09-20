@@ -13,6 +13,7 @@ import logging
 import secrets
 import shlex
 import shutil
+import sys
 import threading
 import time
 import uuid
@@ -128,12 +129,11 @@ async def _startup() -> None:
 @app.get("/api/health")
 async def health(authorization: str = Header(default="")):
     _auth(authorization)
-    aisbench = store.get_setting("aisbench_command", "ais_bench")
     return {
         "status": "ok",
         "version": SIDECAR_VERSION,
+        "runtime": "frozen" if getattr(sys, "frozen", False) else "source",
         "uptime_s": round(time.time() - _state["started_at"], 1),
-        "aisbench_command": aisbench,
         "home": str(config.HOME),
     }
 
@@ -682,43 +682,57 @@ async def config_validate(body: ValidateReq, authorization: str = Header(default
 
 @app.get("/api/diagnosis")
 async def diagnosis(authorization: str = Header(default="")):
+    """Runtime-readiness check. Packaged builds are self-contained: this
+    verifies the BUNDLED ais_bench/tokenizer assets instead of hunting for
+    an external Python/pip environment."""
     _auth(authorization)
     items = []
+    frozen = getattr(sys, "frozen", False)
 
     def add(ok: bool, name: str, detail: str, hint: str = ""):
         items.append({"ok": ok, "name": name, "detail": detail, "hint": hint})
 
     add(True, "Sidecar 服务", f"运行中 · 版本 {SIDECAR_VERSION} · home={config.HOME}")
-    add(True, "Python", f"{__import__('sys').version.split()[0]}")
 
-    cmd = store.get_setting("aisbench_command", "ais_bench")
-    argv = shlex.split(cmd, posix=False)
-    found = False
-    version = ""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *argv[:1], "--version", stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE)
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
-        if proc.returncode == 0:
-            found, version = True, out.decode(errors="replace").strip()[:120]
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        import importlib.util
-        if importlib.util.find_spec("ais_bench"):
-            found = True
-            version = version or "python module ais_bench 可导入"
-    except Exception:  # noqa: BLE001
-        pass
-    add(found, "AISBench", version or "未找到 ais_bench 命令或模块",
-        "" if found else "pip install ais_bench_benchmark==3.1.20260630（或在设置中把 aisbench_command 指向 mock）")
+    if frozen:
+        add(True, "运行模式", "自包含打包模式 — Python / ais_bench / 全部依赖随包内置，无需外部环境")
+        argv_prefix, child_mode = runner.resolve_command(store.get_setting("aisbench_command", ""))
+        if child_mode:
+            add(True, "AISBench（内置）", "随包内置，通过 --child-aisbench 自引用执行，无需安装")
+        else:
+            add(True, "AISBench", f"使用自定义命令: {' '.join(argv_prefix)}")
+        add(True, "Python（内置）", sys.version.split()[0])
+    else:
+        add(True, "运行模式", "开发模式 — 使用外部 Python 与 pip 安装的 ais_bench")
+        add(True, "Python", sys.version.split()[0])
+        cmd = store.get_setting("aisbench_command", "ais_bench")
+        argv = shlex.split(cmd, posix=False)
+        found, version = False, ""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *argv[:1], "--version", stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE)
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+            if proc.returncode == 0:
+                found, version = True, out.decode(errors="replace").strip()[:120]
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            import importlib.util
+            if importlib.util.find_spec("ais_bench"):
+                found = True
+                version = version or "python module ais_bench 可导入"
+        except Exception:  # noqa: BLE001
+            pass
+        add(found, "AISBench（外部）", version or "未找到 ais_bench 命令或模块",
+            "" if found else "pip install ais_bench_benchmark==3.1.20260630（或在设置中把 aisbench_command 指向 mock）")
 
     try:
         import transformers
         add(True, "transformers", f"v{transformers.__version__}（GLM 系列词表需 ≥5.0，其余 4.x 可用）")
     except ImportError:
-        add(False, "transformers", "未安装", "pip install transformers>=4.40")
+        add(False, "transformers", "未安装" if not frozen else "内置 transformers 缺失",
+            "" if frozen else "pip install transformers>=4.40")
 
     toks = tokenizer_mgr.list_tokenizers()
     ok_toks = []
@@ -726,7 +740,13 @@ async def diagnosis(authorization: str = Header(default="")):
         p = Path(t["path"])
         ok_toks.append(f"{t['name']}({'✓' if (p/'tokenizer.json').exists() else '?'})")
     add(bool(toks), "Tokenizer 注册表", f"{len(toks)} 项: " + ", ".join(ok_toks),
-        "" if toks else "在数据集页注册包含 tokenizer.json 的模型目录")
+        "" if toks else "打包 assets/model 或 D:\\Models 下放含 tokenizer.json 的目录即自动注册")
+
+    if not frozen:
+        wp = store.get_setting("work_path", "")
+        add(bool(wp), "work_path（仅开发模式）",
+            wp or "未配置 — 按 ais_bench 包内默认工作区处理",
+            "" if wp else "源码模式做名称解析时才需要指向 pip 安装的 site-packages 根")
 
     disk_ok = True
     try:

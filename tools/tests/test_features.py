@@ -370,6 +370,26 @@ def test_tokenizer_mgr(tmp):
     print("tokenizer mgr OK")
 
 
+def test_resolve_command():
+    """Frozen builds are self-contained (self re-entry); source keeps external CLI."""
+    from app import runner
+    argv, child = runner.resolve_command("ais_bench", frozen=False)
+    assert argv == ["ais_bench"] and not child
+    argv, child = runner.resolve_command("", frozen=False)
+    assert argv == ["ais_bench"] and not child
+    argv, child = runner.resolve_command("py -3.11 mock.py", frozen=False)
+    assert argv == ["py", "-3.11", "mock.py"] and not child
+    # frozen: default / legacy value / explicit marker → self re-entry
+    for cmd in ("", "ais_bench", "D:\\x\\app.exe --child-aisbench"):
+        argv, child = runner.resolve_command(cmd, frozen=True)
+        assert child, cmd
+    assert runner.resolve_command("", frozen=True)[0][1] == "--child-aisbench"
+    # frozen custom command (mock) still honored
+    argv, child = runner.resolve_command("py -3.11 mock.py", frozen=True)
+    assert not child and argv == ["py", "-3.11", "mock.py"]
+    print("resolve command OK")
+
+
 if __name__ == "__main__":
     tmp = tempfile.mkdtemp(prefix="pt_features_")
     config.init_home(str(tmp))
@@ -386,6 +406,7 @@ if __name__ == "__main__":
     test_parse_aisbench_log(tmp)
     test_dataset_gen_real(tmp)
     test_tokenizer_mgr(tmp)
+    test_resolve_command()
     # compare + reports need runs in the same home
     test_compare_engine(tmp)
     test_reports(tmp)

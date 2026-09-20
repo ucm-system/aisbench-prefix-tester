@@ -8,10 +8,13 @@ export default function SettingsPage() {
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [theme, setTheme] = useState(localStorage.getItem("pt-theme") || "auto");
   const [regDir, setRegDir] = useState("");
+  const [runtime, setRuntime] = useState<"" | "frozen" | "source">("");
 
   const load = () => {
     api.get<any>("/api/diagnosis").then((d) => setItems(d.items)).catch(() => setItems([]));
     api.get<Record<string, string>>("/api/settings").then(setSettings).catch(() => {});
+    api.get<{ runtime?: string }>("/api/health")
+      .then((h) => setRuntime((h.runtime as any) ?? "")).catch(() => {});
   };
   useEffect(load, []);
 
@@ -47,16 +50,29 @@ export default function SettingsPage() {
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <div className="card">
           <h3>压测执行</h3>
-          <div className="field" style={{ marginBottom: 10 }}>
-            <label>aisbench 命令（默认自动探测 ais_bench CLI；无 GPU 环境可指向 tools/mock_aisbench.py）</label>
-            <input className="inp mono" value={settings.aisbench_command ?? ""}
-              onChange={(e) => set("aisbench_command", e.target.value)} />
-          </div>
-          <div className="field" style={{ marginBottom: 10 }}>
-            <label>AISBench 工作区 work_path（留空=自动探测 site-packages）</label>
-            <input className="inp mono" value={settings.work_path ?? ""}
-              onChange={(e) => set("work_path", e.target.value)} />
-          </div>
+          {runtime === "frozen" ? (
+            <>
+              <div className="kv"><span>AISBench 运行时</span>
+                <b>内置自包含（Python + ais_bench 随包，无需配置）</b></div>
+              <div className="kv"><span>work_path</span><b>内置模式不需要</b></div>
+              <div className="subnote" style={{ margin: "8px 0" }}>
+                高级：可在诊断页确认内置运行时；如需指向 mock/自定义命令，用「设置 → aisbench_command」接口覆盖（仅调试用）。
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="field" style={{ marginBottom: 10 }}>
+                <label>aisbench 命令（默认自动探测 ais_bench CLI；无 GPU 环境可指向 tools/mock_aisbench.py）</label>
+                <input className="inp mono" value={settings.aisbench_command ?? ""}
+                  onChange={(e) => set("aisbench_command", e.target.value)} />
+              </div>
+              <div className="field" style={{ marginBottom: 10 }}>
+                <label>AISBench 工作区 work_path（留空=自动探测 site-packages；仅源码/开发模式需要）</label>
+                <input className="inp mono" value={settings.work_path ?? ""}
+                  onChange={(e) => set("work_path", e.target.value)} />
+              </div>
+            </>
+          )}
           <div className="kv"><span>指标轮询间隔（秒）</span>
             <div className="seg">
               {["2", "5", "10", "30"].map((v) => (

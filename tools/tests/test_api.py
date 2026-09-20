@@ -205,6 +205,14 @@ def test_datasets_preview():
     print("dataset preview OK")
 
 
+def test_diagnosis_runtime_ready():
+    d = c.get("/api/diagnosis", headers=H).json()
+    names = [i["name"] for i in d["items"]]
+    assert any("运行模式" in n for n in names), names
+    assert any("AISBench" in n for n in names), names
+    print("diagnosis OK")
+
+
 def test_run_detail_404():
     r = c.get("/api/runs/nope", headers=H)
     assert r.status_code == 404
@@ -228,6 +236,7 @@ def main():
         test_stop_never_rewrites_history()
         test_parse_sla_ms_suffix()
         test_datasets_preview()
+        test_diagnosis_runtime_ready()
         test_run_detail_404()
     print("ALL API TESTS PASSED")
 
