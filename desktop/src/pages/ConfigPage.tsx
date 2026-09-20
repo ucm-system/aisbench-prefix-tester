@@ -229,6 +229,17 @@ export default function ConfigPage() {
               {datasets.map((d) => <option key={d.id} value={d.id}>{d.name}（{d.mode}）</option>)}
             </select>
             {datasetId && <span className="tag blue">将跳过生成，直接复用</span>}
+            {datasetId && (
+              <button className="btn sm danger" onClick={async () => {
+                const d = datasets.find((x) => x.id === datasetId);
+                if (!confirm(`删除数据集「${d?.name ?? datasetId}」？（不删文件）`)) return;
+                try {
+                  await api.del(`/api/datasets/${datasetId}`);
+                  setDatasetId(""); set({ dataset_id: null });
+                  api.get<any[]>("/api/datasets").then(setDatasets).catch(() => {});
+                } catch (e: any) { toast(`删除失败：${e.message}`); }
+              }}>删除</button>
+            )}
           </div>
           <button className="btn" onClick={doPreview} disabled={busy}>▦ 生成数据集预览</button>
           {preview && (

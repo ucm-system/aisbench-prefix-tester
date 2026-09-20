@@ -1,10 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { connStatus, initConnection, onSidecarExited, restartSidecar } from "./api";
+import { api, connStatus, initConnection, onSidecarExited, restartSidecar } from "./api";
 import ConfigPage from "./pages/ConfigPage";
 import MonitorPage from "./pages/MonitorPage";
 import HistoryPage from "./pages/HistoryPage";
 import ComparePage from "./pages/ComparePage";
-import DatasetsPage from "./pages/DatasetsPage";
 import SettingsPage from "./pages/SettingsPage";
 import SlaPage from "./pages/SlaPage";
 
@@ -21,22 +20,28 @@ const TITLES: Record<string, [string, string]> = {
   monitor: ["运行监控", "实时指标 · 日志流 · 阶段进度"],
   history: ["运行记录", "详情 / 导出 / 标记"],
   compare: ["对比分析", "排除预埋与练习轮"],
-  datasets: ["数据集", "生成 · 预览 · 复用"],
   settings: ["设置", "环境诊断 · 采集 · 关于"],
   sla: ["SLA 调优", "相同命中率下搜索最大可用并发"],
 };
 
 export default function App() {
-  const [route, setRoute] = useState(location.hash.replace(/^#\/?/, "") || "monitor");
+  const [route, setRoute] = useState(location.hash.replace(/^#\/?/, "") || "config");
   const [toastMsg, setToastMsg] = useState("");
   const [sidecarDown, setSidecarDown] = useState(false);
   const [ready, setReady] = useState(false);
+  const [activeRun, setActiveRun] = useState<{ run_id: string; name: string } | null>(null);
 
   useEffect(() => {
-    const onHash = () => setRoute(location.hash.replace(/^#\/?/, "") || "monitor");
+    const onHash = () => setRoute(location.hash.replace(/^#\/?/, "") || "config");
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+
+  // monitor/datasets are no longer nav tabs: monitor is reached via jumps,
+  // datasets management moved into config/settings — redirect stale hashes
+  useEffect(() => {
+    if (route.split("/")[0] === "datasets") navigate("/config");
+  }, [route]);
 
   useEffect(() => {
     const saved = localStorage.getItem("pt-theme") || "auto";
@@ -50,6 +55,21 @@ export default function App() {
     })();
     onSidecarExited(() => setSidecarDown(true));
   }, []);
+
+  // global "a run is active" indicator → jump back into the live monitor view
+  useEffect(() => {
+    if (!ready) return;
+    const tick = async () => {
+      try {
+        const rs = await api.get<{ run_id: string; status: string; name: string }[]>("/api/runs");
+        const act = rs.find((r) => r.status === "running" || r.status === "pending");
+        setActiveRun(act ? { run_id: act.run_id, name: act.name || act.run_id } : null);
+      } catch { /* sidecar offline */ }
+    };
+    tick();
+    const t = setInterval(tick, 5000);
+    return () => clearInterval(t);
+  }, [ready]);
 
   const toast = useCallback<Toast>((msg) => {
     setToastMsg(msg);
@@ -80,10 +100,8 @@ export default function App() {
         </div>
         <nav className="nav">
           {nav("config", "新建测试", i("M12 5v14M5 12h14"))}
-          {nav("monitor", "运行监控", i("M22 12h-4l-3 9L9 3l-3 9H2"))}
           {nav("history", "运行记录", i("M3 12a9 9 0 1 0 9-9 9 9 0 0 0-7.6 4.2M3 3v5h5"))}
           {nav("compare", "对比分析", i("M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3M12 1v22"))}
-          {nav("datasets", "数据集", i("M3 5c0 1.7 4 3 9 3s9-1.3 9-3-4-3-9-3-9 1.3-9 3zM3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5M3 12c0 1.7 4 3 9 3s9-1.3 9-3"))}
           {nav("settings", "设置", i("M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5h.1a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"))}
           {nav("sla", "SLA 调优", i("M3 3v18h18M8 17V9m5 8V5m5 12v-6"))}
         </nav>
@@ -102,6 +120,13 @@ export default function App() {
           <h1>{title}</h1>
           <span className="crumb">{crumb}</span>
           <div className="top-right">
+            {activeRun && (
+              <span className="chip" style={{ cursor: "pointer", borderColor: "var(--brand)", color: "var(--text)" }}
+                title="有正在运行的测试，点击打开运行监控"
+                onClick={() => navigate(`/monitor/${activeRun.run_id}`)}>
+                <span className="dot pulse" /> {activeRun.name}
+              </span>
+            )}
             <span className="chip">
               <span className="dot" style={{ background: connStatus.connected ? undefined : "#e5484d" }} />
               {connStatus.connected ? "Sidecar 就绪" : "Sidecar 离线"}
@@ -128,7 +153,6 @@ export default function App() {
               {pageKey === "monitor" && <MonitorPage route={route} />}
               {pageKey === "history" && <HistoryPage />}
               {pageKey === "compare" && <ComparePage />}
-              {pageKey === "datasets" && <DatasetsPage />}
               {pageKey === "settings" && <SettingsPage />}
               {pageKey === "sla" && <SlaPage />}
             </>

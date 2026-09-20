@@ -7,6 +7,7 @@ export default function SettingsPage() {
   const [items, setItems] = useState<{ ok: boolean; name: string; detail: string; hint: string }[]>([]);
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [theme, setTheme] = useState(localStorage.getItem("pt-theme") || "auto");
+  const [regDir, setRegDir] = useState("");
 
   const load = () => {
     api.get<any>("/api/diagnosis").then((d) => setItems(d.items)).catch(() => setItems([]));
@@ -81,6 +82,25 @@ export default function SettingsPage() {
               <option value="dark">深色</option>
             </select></div>
           <div className="kv" style={{ borderBottom: "none" }}><span>即时生效，重启后保持；浅色主题已全面适配对比度</span><span /></div>
+        </div>
+        <div className="card">
+          <h3>Tokenizer 资产</h3>
+          <div className="row" style={{ alignItems: "center" }}>
+            <div className="subnote" style={{ width: 140 }}>注册自定义模型目录：</div>
+            <input className="inp mono" style={{ flex: 1 }} placeholder="D:\path\to\model-dir（含 tokenizer.json）"
+              value={regDir} onChange={(e) => setRegDir(e.target.value)} />
+            <button className="btn sm" onClick={async () => {
+              if (!regDir.trim()) { toast("请先填写目录"); return; }
+              try {
+                await api.post("/api/tokenizers", { name: regDir.split(/[\\/]/).pop(), path: regDir });
+                toast("已注册"); setRegDir(""); load();
+              } catch (e: any) { toast(e.message); }
+            }}>注册</button>
+          </div>
+          <div className="subnote" style={{ marginTop: 8 }}>
+            应用打包目录 assets/model 与本机 D:\Models 下的 tokenizer 会自动注册，无需手工添加；
+            从 ModelScope 下载新 tokenizer 的方法见 docs/MODELSCOPE_TOKENIZER.md。
+          </div>
         </div>
         <div className="card">
           <h3>关于</h3>

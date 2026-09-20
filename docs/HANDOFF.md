@@ -107,3 +107,8 @@
 5. **主题修复**：设置页主题下拉原为非受控 `defaultValue`，永远显示「跟随系统」→ 改受控并即时应用；浅色主题全面修复对比度——约 20 处硬编码深色值（表格行线/悬停、logview 配色、tag/alert/phase、seg/tabs/导航高亮文字、滚动条、actionbar、toast、`color-scheme:dark` 强制）改为 CSS 变量并补浅色映射。
 
 验证：`tools/tests/test_features.py` 新增 store kinds/delete/sla-jobs 用例，全绿；API 层冒烟（kind 过滤、单条/批量删除、SLA 路由）通过；`npm run build` 通过。
+
+### 第二轮（导航重构，同日）
+
+6. **运行监控不再是独立页签**：侧栏移除「运行监控」「数据集」两项；监控改为跳转式进入——新建测试点「开始测试」后自动跳 `/monitor/<run_id>`（原有逻辑），运行记录每行有「监控」按钮；另在顶栏加全局「● 运行中 <名称>」芯片（5s 轮询，有存活 run 才显示），点击回到实时监控，切走后不会找不到正在跑的任务。默认落地页从 monitor 改为 config；旧 `#/datasets` hash 自动重定向到 `/config`。
+7. **数据集页删除**：生成/预览/复用本来就内嵌在「新建测试」流程；仅有的两个独有功能已迁移——注册自定义 tokenizer 目录 → 设置页「Tokenizer 资产」卡片；删除已入库数据集 → 配置页「复用已入库数据集」旁的删除按钮。`DatasetsPage.tsx` 已删除。
