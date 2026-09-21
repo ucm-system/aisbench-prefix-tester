@@ -31,7 +31,7 @@
 ## 4. 如何运行
 
 - 开发：`cd desktop && npm run dev`（vite 自启 sidecar，写 `.sidecar-dev.json`；UI http://localhost:5173 或 5174）。Python 必须 `py -3.11`（系统 `python` 是无 pip 的 venv）。npm 需 `ELECTRON_MIRROR`（已配 npmmirror）。
-- 设置项（存于 SQLite `app.db` 的 settings 表，**不是 settings.json**）：`aisbench_command`（见 §5 的关键区别）、`work_path`（pip 安装的 ais_bench 的 site-packages 根，本机 `C:\Users\user\AppData\Local\Programs\Python\Python311\Lib\site-packages`）。
+- 设置项（存于 SQLite `app.db` 的 settings 表，**不是 settings.json**）：`aisbench_command`（见 §5 的关键区别）、`work_path`（pip 安装的 ais_bench 的 site-packages 根，本机 `C:\Users\<user>\AppData\Local\Programs\Python\Python311\Lib\site-packages`）。
 - 打包：PyInstaller spec = `sidecar/aisbench-sidecar.spec`；electron-builder 输出 `D:\pt-release`（避免 EPERM）。
 - 单测：`py -3.11 tools/tests/test_features.py`（当前全绿）。
 
@@ -79,8 +79,8 @@
 
 ## 7. 服务器与凭据
 
-- 203.0.113.10，root / REDACTED-INTERNAL-CREDENTIAL，工作目录 `/home/dxlong`，运维脚本 `/home/dxlong/ops/`（本地镜像 `D:\Vibe_Workspace\ucm-server-ops\`）。
-- SSH：`py -3.11 C:\Users\user\.claude\skills\ssh-skill\scripts\ssh_execute.py [--timeout N] 203.0.113.10 '<cmd>'`。
+- 服务器：地址与 root 凭据**已随仓库公开化移除**（内部 NPU 服务器，请联系维护者获取），工作目录 `/home/dxlong`，运维脚本 `/home/dxlong/ops/`（本地镜像 `D:\Vibe_Workspace\ucm-server-ops\`）。
+- SSH：经内部 ssh 运维工具执行（凭据同上）。
 - **命令内禁双引号**（PowerShell 原生参数拆分会吃掉）；复杂命令写本地 .sh → LF 归一化（CRLF 会搞挂服务器脚本）→ base64 → `echo <b64> | base64 -d > x.sh && bash x.sh`。
 - 容器现况：`dxlong-pt-base` UP（8101 服务运行中）；`dxlong-pt-ucm` UP（服务未启动）；`dxlong-pt-pd` 已删除。
 - 重启单实例：`docker exec dxlong-pt-base bash /opt/q3_inner_base.sh`（脚本已在容器内；容器重建用 `dxlong_pt_launch.sh` + `dxlong_pt_q3_inner_base.sh`/`..._ucm.sh`）。

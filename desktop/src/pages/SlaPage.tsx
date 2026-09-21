@@ -17,7 +17,7 @@ export default function SlaPage() {
   const toast = useToast();
   const [toks, setToks] = useState<{ name: string }[]>([]);
   const [form, setForm] = useState({
-    host: "203.0.113.10", port: 8101, model_name: "qwen3", tokenizer: "",
+    host: "192.168.1.10", port: 8000, model_name: "qwen3", tokenizer: "",
     input_len: 4096, output_len: 32, data_num: 64, prefix_num: 4,
     repeat_rate: "90", dp: 1, seed: 42, pods: "",
   });

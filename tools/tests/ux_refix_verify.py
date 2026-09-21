@@ -25,7 +25,10 @@ SIDECAR = ROOT / "sidecar"
 UI_DIR = ROOT / "desktop" / "dist"
 PY = sys.executable
 MOCK_PORT = 8091
-REAL_HOST, REAL_PORT = "203.0.113.10", 8101
+# 真实服务目标经环境变量提供（内部地址不入库）：PT_REAL_HOST / PT_REAL_PORT；
+# 未设置时跳过 Phase B（真实 run）与相关检查
+REAL_HOST = os.environ.get("PT_REAL_HOST", "")
+REAL_PORT = int(os.environ.get("PT_REAL_PORT", "8101"))
 EDGE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 CDP_PORT = 9335
 
@@ -140,9 +143,11 @@ async def main():
                   f"samples={len(m_samples)} "
                   f"agg={bool(((d_mock.get('rounds') or [{}])[-1].get('hit_rate') or {}).get('aggregated'))}")
 
-            # ---- Phase B: 真实服务 run（真实 ais_bench CLI） ----
-            if mock_only:
+            # ---- Phase B: 真实服务 run（真实 ais_bench CLI，目标经 PT_REAL_HOST 提供） ----
+            if mock_only or not REAL_HOST:
                 rid_real = None
+                if not REAL_HOST:
+                    print("  [info] 未设置 PT_REAL_HOST，跳过真实服务阶段")
             else:
                 await api.put("/api/settings", json={"aisbench_command": ""})  # 回落本机 ais_bench
                 rid_real = (await api.post("/api/runs", json={

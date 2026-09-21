@@ -170,4 +170,4 @@ Agent 指南（含易错语义与 API 速查）：[skills/prefix-tester/SKILL.md
 
 ## License
 
-内部工具，版权归组织所有。
+[Apache License 2.0](LICENSE)
