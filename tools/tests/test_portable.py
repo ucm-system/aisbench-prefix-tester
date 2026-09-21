@@ -60,7 +60,14 @@ try:
     diag = c.get("/api/diagnosis").json()["items"]
     mode = next((i for i in diag if i["name"] == "运行模式"), {})
     ais = next((i for i in diag if "AISBench" in i["name"]), {})
-    check("P2 自包含声明", "自包含" in (mode.get("detail") or ""), str(mode))
+    # honest-diagnosis contract: with an effective aisbench_command override the
+    # mode item must say so; on a clean self-contained home it must claim 内置.
+    override = (c.get("/api/settings").json().get("aisbench_command") or "").strip()
+    expect_override = bool(override) and override != "ais_bench" and "--child-aisbench" not in override
+    mode_d = mode.get("detail") or ""
+    check("P2 运行模式声明自洽",
+          ("已被自定义命令覆盖" in mode_d) if expect_override else ("自包含" in mode_d),
+          f"cmd={override!r} | {mode}")
     check("P3 内置 AISBench ok", bool(ais.get("ok")), str(ais))
 
     toks = c.get("/api/tokenizers").json()
