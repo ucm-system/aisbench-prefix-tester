@@ -1,39 +1,58 @@
 # -*- coding: utf-8 -*-
-"""生成应用图标 desktop/build/icon.ico（与前端 AppIcon 同构：层叠块+命中闪电）。
+"""生成应用图标 desktop/build/icon.ico —— 经典 PC 徽标。
 
-层叠块 = 前缀缓存层（两道半透明白条），闪电 = 命中高亮（#fbbf24），
-底为 #2f6ff0→#14b8a6 对角渐变圆角方块。输出 256/64/48/32/16 多尺寸 ICO。
+与前端 logo-mark 同构：135° 渐变（#2b7fff → #13c2c2）圆角方块 + 白色粗体 PC。
+输出 256/64/48/32/16 多尺寸 ICO，用于 exe / 安装器 / 任务栏 / 开始菜单。
 """
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 OUT = Path(__file__).resolve().parents[1] / "desktop" / "build" / "icon.ico"
 OUT.parent.mkdir(parents=True, exist_ok=True)
 
+C0 = (0x2B, 0x7F, 0xFF)   # 渐变起点（左上）
+C1 = (0x13, 0xC2, 0xC2)   # 渐变终点（右下）
+FONT_CANDIDATES = [
+    r"C:\Windows\Fonts\segoeuib.ttf",   # Segoe UI Bold
+    r"C:\Windows\Fonts\arialbd.ttf",    # Arial Bold
+]
+
+
+def load_font(size: int) -> ImageFont.FreeTypeFont:
+    for path in FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
 
 def make_256() -> Image.Image:
-    img = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
-    # 对角渐变底（纵向近似）+ 圆角遮罩
-    grad = Image.new("RGBA", (256, 256))
-    gd = ImageDraw.Draw(grad)
-    for y in range(256):
-        t = y / 255.0
-        r = int(0x2F + (0x14 - 0x2F) * t)
-        g = int(0x6F + (0xB8 - 0x6F) * t)
-        b = int(0xF0 + (0xA6 - 0xF0) * t)
-        gd.line([(0, y), (256, y)], fill=(r, g, b, 255))
-    mask = Image.new("L", (256, 256), 0)
+    n = 256
+    img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    # 135° 对角渐变（左上 #2b7fff → 右下 #13c2c2）+ 圆角遮罩
+    # （旧 .logo-mark：30px 盒 9px 圆角 ≈ 30%）
+    grad = Image.new("RGBA", (n, n))
+    px = grad.load()
+    span = 2 * n - 2
+    for y in range(n):
+        for x in range(n):
+            t = (x + y) / span
+            px[x, y] = (int(C0[0] + (C1[0] - C0[0]) * t),
+                        int(C0[1] + (C1[1] - C0[1]) * t),
+                        int(C0[2] + (C1[2] - C0[2]) * t), 255)
+    mask = Image.new("L", (n, n), 0)
     md = ImageDraw.Draw(mask)
-    md.rounded_rectangle([6, 6, 250, 250], radius=58, fill=255)
+    md.rounded_rectangle([4, 4, n - 4, n - 4], radius=76, fill=255)
     img.paste(grad, (0, 0), mask)
+    # 白色粗体 PC（13px/30px 盒 ≈ 43% 字高）
     d = ImageDraw.Draw(img)
-    # 层叠块：两道半透明白条（上更实、下更虚 = 层叠纵深）
-    d.rounded_rectangle([48, 104, 208, 136], radius=13, fill=(255, 255, 255, 210))
-    d.rounded_rectangle([48, 152, 208, 184], radius=13, fill=(255, 255, 255, 132))
-    # 命中闪电（与 AppIcon 32 视窗 M13 4l-4 8h4l-2 6 7-9h-4l3-5z 同形，×8）
-    bolt = [(104, 30), (72, 96), (104, 96), (88, 146), (144, 70), (112, 70), (136, 30)]
-    d.polygon(bolt, fill=(251, 191, 36, 255))
+    font = load_font(112)
+    bbox = d.textbbox((0, 0), "PC", font=font)
+    w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    d.text(((n - w) / 2 - bbox[0], (n - h) / 2 - bbox[1] - 4), "PC",
+           font=font, fill=(255, 255, 255, 255))
     return img
 
 

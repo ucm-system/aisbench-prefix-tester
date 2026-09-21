@@ -222,7 +222,7 @@
 用户反馈：旧 `Setup-0.1.0.exe` 为 oneClick 一键安装（不选路径、无向导）——「太流氓了」。整改为标准 Windows 辅助式安装：
 
 - **NSIS 配置**（desktop/package.json）：`oneClick: false` + `allowToChangeInstallationDirectory: true` + `allowElevation: true`（选 Program Files 时 UAC）+ `installerLanguages: ["zh_CN"]`（中文向导）+ 桌面/开始菜单快捷方式（快捷方式名「AISBench 前缀复用测试器」）+ 完成后运行 + ARP 卸载项显示中文名；卸载保留数据（`deleteAppDataOnUninstall: false`）。
-- **应用图标**：新增 `tools/make_icon.py`（PIL 绘制与前端 AppIcon 同构的层叠块+闪电）生成 `desktop/build/icon.ico`（16/32/48/64/256）；`win.icon` 指向它，main.cjs BrowserWindow 带图标，回退启动屏换新品牌（不再是「PC」字样）。
+- **应用图标**（用户拍板：沿用经典 PC 徽标，弃用初版层叠块+闪电设计）：`tools/make_icon.py`（PIL 绘制 135° 渐变 #2b7fff→#13c2c2 圆角块 + 白色粗体 PC，与前端 .logo-mark 同构）生成 `desktop/build/icon.ico`（16/32/48/64/256）；`win.icon` 指向它，main.cjs BrowserWindow 带图标，回退启动屏同款；exe/安装器/便携包/任务栏/开始菜单/侧栏 logo/favicon 全部同一徽标（已做像素级验证：三 exe 均 blue/cyan 渐变 + 白 PC 字）。
 - **版本对齐 0.2.0**：package.json / sidecar version.py / 侧栏与「关于」页三处一致。
 - **重建与验收**（D:\pt-release）：battery 21/21（新 exe）；Setup-0.2.0 静默安装到自定义目录 ✓（exit 0、uninstaller/resources 落位、ARP 显示「AISBench 前缀复用测试器 v0.2.0」）、安装版启动 3s sidecar 就绪（frozen v0.2.0）✓、静默卸载目录与 ARP 干净且数据保留 ✓；portable 7/7 ✓；陈旧 Setup-0.1.0.exe 已删除避免误用。
 - **坑**：重建前 win-unpacked 里开着的应用实例会锁输出目录（EBUSY rmdir）——打包前先关旧实例；应用有单实例锁，安装版与 win-unpacked 同时启动时后来者静默退出。

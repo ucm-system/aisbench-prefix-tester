@@ -44,7 +44,7 @@ a{color:var(--brand)}
 /* ============ 侧栏 ============ */
 #sidebar{width:216px;min-width:216px;background:var(--bg1);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:14px 10px}
 .logo{display:flex;align-items:center;gap:10px;padding:4px 8px 14px;cursor:default}
-.logo-mark{width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,#2f6ff0,#14b8a6);display:flex;align-items:center;justify-content:center;color:#fff;flex:none}
+.logo-mark{width:32px;height:32px;display:flex;align-items:center;justify-content:center;color:#fff;flex:none}
 .logo b{font-size:13.5px;display:block}
 .logo span{font-size:10.5px;color:var(--muted)}
 .nav{display:flex;flex-direction:column;gap:2px;margin-top:4px}

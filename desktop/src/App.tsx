@@ -16,14 +16,19 @@ export function navigate(hash: string) {
   location.hash = hash;
 }
 
-/** 应用图标（A4：层叠块=前缀缓存层 + 高亮=命中） */
+/** 应用图标（经典 PC 徽标：135° 渐变圆角块 + 白色粗体 PC，与任务栏/开始菜单/exe 图标同构） */
 export function AppIcon({ size = 22 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
-      <rect width="32" height="32" rx="7" fill="#2f6ff0" />
-      <rect x="6" y="19" width="20" height="4" rx="1.5" fill="#fff" opacity=".55" />
-      <rect x="6" y="13" width="20" height="4" rx="1.5" fill="#fff" opacity=".8" />
-      <path d="M13 4l-4 8h4l-2 6 7-9h-4l3-5z" fill="#fbbf24" />
+      <defs>
+        <linearGradient id="pc-icon-grad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#2b7fff" />
+          <stop offset="1" stopColor="#13c2c2" />
+        </linearGradient>
+      </defs>
+      <rect width="32" height="32" rx="9" fill="url(#pc-icon-grad)" />
+      <text x="16" y="21.5" textAnchor="middle" fontSize="13" fontWeight="800"
+            fill="#fff" fontFamily="Inter, 'Segoe UI', sans-serif">PC</text>
     </svg>
   );
 }
@@ -128,7 +133,7 @@ export default function App() {
     <ToastCtx.Provider value={toast}>
       <aside id="sidebar">
         <div className="logo">
-          <div className="logo-mark"><AppIcon size={22} /></div>
+          <div className="logo-mark"><AppIcon size={30} /></div>
           <div><b>前缀复用测试器</b><span>AISBench Prefix Tester</span></div>
         </div>
         <nav className="nav">

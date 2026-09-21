@@ -175,10 +175,10 @@ function createWindow() {
         '<html><body style="margin:0;background:#0f1115;display:flex;align-items:center;justify-content:center;height:100vh;font-family:Segoe UI,PingFang SC,sans-serif">' +
         '<div style="text-align:center">' +
         '<svg width="52" height="52" viewBox="0 0 32 32" style="margin:0 auto 14px;display:block">' +
-        '<rect width="32" height="32" rx="7" fill="#2f6ff0"/>' +
-        '<rect x="6" y="19" width="20" height="4" rx="1.5" fill="#fff" opacity=".55"/>' +
-        '<rect x="6" y="13" width="20" height="4" rx="1.5" fill="#fff" opacity=".8"/>' +
-        '<path d="M13 4l-4 8h4l-2 6 7-9h-4l3-5z" fill="#fbbf24"/></svg>' +
+        '<defs><linearGradient id="pcg" x1="0" y1="0" x2="1" y2="1">' +
+        '<stop offset="0" stop-color="#2b7fff"/><stop offset="1" stop-color="#13c2c2"/></linearGradient></defs>' +
+        '<rect width="32" height="32" rx="9" fill="url(#pcg)"/>' +
+        '<text x="16" y="21.5" text-anchor="middle" font-size="13" font-weight="800" fill="#fff" font-family="Segoe UI,sans-serif">PC</text></svg>' +
         '<div style="color:#e6e9f0;font-size:14px">AISBench 前缀复用测试器</div>' +
         '<div style="color:#9aa3b2;font-size:12px;margin-top:6px">正在启动服务…</div></div></body></html>');
       win.loadURL(splash);
