@@ -237,4 +237,4 @@
   3. spec 打包策展：**排除 DeepSeek\*** 目录与 smoke 证据文件（manifest/README 保留），并补 `sentencepiece` + `tiktoken(_ext.openai_public)` 隐式依赖（Kimi/老 ChatGLM 的懒加载链路 PyInstaller 看不见）。
 - **注册扫描修复**（config.py）：原候选条件只认 tokenizer.json/vocab.json，Kimi（tiktoken.model + tokenization_*.py）与 glm-4-9b-chat（tokenizer.model + 自定义代码）4 个目录不注册；`_looks_like_tokenizer_dir()` 扩展为四标记 + tiktoken/自定义布局，22/22 注册（含 D:\Models）。
 - 验证：22 tokenizer 注册、glm-4-9b-chat/Kimi×3/Qwen3.5-9B/GLM-5/MiniMax-M2.1 `verify ok=True` 且中文探针非空、DeepSeek×2 被拦截；test_features/test_api 全绿；tsc 0 错误。
-- **待用户拍板**：是否重打安装包（当前 392MB 产物未含新 tokenizer，spec 策展后全量约 +221MB ≈ 613MB）。
+- **用户拍板（2026-09-21）：暂不重打安装包**——当前 392MB 产物保持不动（未含新 tokenizer）；新 tokenizer 在源码模式/开发环境立即可用。下次重打时 spec 已策展就绪：排除 DeepSeek×3（22.5MB）与 smoke 证据文件，预计安装包 392 + ~237MB ≈ **630MB**。
