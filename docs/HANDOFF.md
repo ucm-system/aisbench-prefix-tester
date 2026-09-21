@@ -185,3 +185,17 @@
 
 6. **运行监控不再是独立页签**：侧栏移除「运行监控」「数据集」两项；监控改为跳转式进入——新建测试点「开始测试」后自动跳 `/monitor/<run_id>`（原有逻辑），运行记录每行有「监控」按钮；另在顶栏加全局「● 运行中 <名称>」芯片（5s 轮询，有存活 run 才显示），点击回到实时监控，切走后不会找不到正在跑的任务。默认落地页从 monitor 改为 config；旧 `#/datasets` hash 自动重定向到 `/config`。
 7. **数据集页删除**：生成/预览/复用本来就内嵌在「新建测试」流程；仅有的两个独有功能已迁移——注册自定义 tokenizer 目录 → 设置页「Tokenizer 资产」卡片；删除已入库数据集 → 配置页「复用已入库数据集」旁的删除按钮。`DatasetsPage.tsx` 已删除。
+
+### 第九轮（真实用户走查 13 项体验问题：僵尸 run 对账 + 超限守卫 + 状态列/命名）
+
+以真实用户视角完整走查 `D:\pt-release\win-unpacked`（连真实服务、发测试、盯监控、看记录/对比/SLA/设置），暴露 13 个问题并按优先级修复：
+
+- **僵尸 run 对账**：应用中途被杀后 run 永远「运行中」，顶栏挂「有正在运行的测试」而 SLA 页显示「已中断」，互相矛盾。`store.reconcile_orphans()` 在 sidecar 启动时把 `pending/running` 的 runs 与活动态 sla_jobs 一次性落库为 `interrupted`（补 finished_at），startup 打 warning 日志；test_api 新增 `test_reconcile_orphans`（含幂等性断言）。
+- **input_len 超限守卫（根除「手动跑全是 Bad Request」）**：`/api/probe` 返回 `max_model_len`（/v1/models 各模型最小值）与 `served_names`；ConfigPage 探测后显示「上下文上限 N tok」，input+output 超限时拒绝开始（toast + 摘要卡红色预警），连接目标变更时自动失效。此前默认 input_len=32768 > 8101 服务的 max-model-len 8192，vLLM 逐请求 400。
+- **运行记录**：新增「状态」列（已完成/运行中/失败/已停止/已中断/排队中，着色）；底部新增显眼「运行名称」输入框（绑定第一轮 test_name，重置一并清空）；详情抽屉状态中文化。
+- **抽屉交互**：✕ 移到首位防误触「标记练习轮」；练习轮标记加 confirm；抽屉头部新增「⇄ 对比所选」——开着抽屉也能对比（此前按钮被抽屉完全拦截）；抽屉体顶部聚合警告横幅，轮间缓存清理失败等关键警告不再只挤在表格单元格。
+- **设置页自洽**：诊断「运行模式」如实区分「内置自包含」与「已被自定义命令覆盖」；frozen 卡片显示 aisbench_command 覆盖输入框（可清空回内置）；「关于→数据目录」改显示真实 home（/api/health.home），不再写死 %APPDATA%。
+- **SLA 页默认值**：采集端点加 placeholder + 留空启动二次确认（命中率恒 0 风险）；tokenizer 预置与新建测试页互通（localStorage `pt-tokenizer`）。
+- **细节**：favicon 内联 SVG（消除控制台 404）；「校验配置」按钮反馈 toast（通过/警告/错误）。
+- 测试：test_api 16/16、test_features 17/17、test_e2e_battery 21/21（新 sidecar exe）全绿；PyInstaller + electron-builder 重建（portable + NSIS）。
+- **走查遗留（按需排期）**：日志流重复刷屏/tqdm 污染过滤；监控页完成后卡片衰减归零 + 结构化逐轮结果区；运行记录分页；默认参数温和化；发布流程「打包前对齐 main」约束。

@@ -62,7 +62,8 @@ export default function SlaPage() {
     if (!connected) return;
     api.get<{ name: string }[]>("/api/tokenizers").then((t) => {
       setToks(t);
-      setForm((f) => ({ ...f, tokenizer: f.tokenizer || (t[0]?.name ?? "") }));
+      // remember the tokenizer picked on the config page across pages/sessions
+      setForm((f) => ({ ...f, tokenizer: f.tokenizer || localStorage.getItem("pt-tokenizer") || (t[0]?.name ?? "") }));
     }).catch(() => {});
   }, [connected]);
 
@@ -91,6 +92,8 @@ export default function SlaPage() {
     if (!Object.keys(slaRows.reduce((a, r) => { a[`${r.metric}_${r.stat}`] = 1; return a; }, {} as Record<string, number>)).length) {
       toast("至少需要一个 SLA 条件"); return;
     }
+    if (!form.pods.trim() && !confirm(
+      "「采集端点」为空：探针将采集不到命中率指标（恒为 0），涉及「相同命中率」的结论会失真。\n仍要继续吗？（建议先填 ip:port，通常与推理端口相同）")) return;
     try {
       const cfg = {
         host_ip: form.host, host_port: form.port, model_name: form.model_name,
@@ -201,7 +204,7 @@ export default function SlaPage() {
               <input className="inp mono" value={form.repeat_rate} onChange={(e) => setForm({ ...form, repeat_rate: e.target.value })} /></div>
           </div>
           <div className="field"><label>采集端点（每行 ip:port，与压测端口一致）</label>
-            <textarea className="inp mono" rows={2} value={form.pods} onChange={(e) => setForm({ ...form, pods: e.target.value })} /></div>
+            <textarea className="inp mono" rows={2} value={form.pods} placeholder={`例如 ${form.host}:${form.port}（通常与推理端口相同；留空则无命中率指标）`} onChange={(e) => setForm({ ...form, pods: e.target.value })} /></div>
         </div>
 
         <div className="card">

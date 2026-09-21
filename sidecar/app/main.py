@@ -105,6 +105,10 @@ async def _startup() -> None:
     events.bind_loop(asyncio.get_running_loop())
     runner.bind_loop(asyncio.get_running_loop())
     store.connect()
+    orphans = store.reconcile_orphans()
+    if orphans["runs"] or orphans["sla_jobs"]:
+        logger.warning("startup reconcile: %s orphaned run(s), %s SLA job(s) -> interrupted",
+                       orphans["runs"], orphans["sla_jobs"])
     tokenizer_mgr.refresh_defaults()
     # auto-default the AISBench workspace to the installed package root so the
     # pip-installed CLI resolves config/dataset names without manual setup
@@ -666,14 +670,22 @@ async def probe_service(body: ProbeReq, authorization: str = Header(default=""))
     _auth(authorization)
     base = body.url.rstrip("/") or f"http://{body.host}:{body.port}"
     out: dict = {"base": base, "models_ok": False, "models": [], "metrics_ok": False,
-                 "ucm_detected": False, "error": ""}
+                 "ucm_detected": False, "error": "", "max_model_len": None,
+                 "served_names": []}
     try:
         async with httpx.AsyncClient(trust_env=False, timeout=4.0) as client:
             try:
                 r = await client.get(f"{base}/v1/models")
                 if r.status_code == 200:
                     out["models_ok"] = True
-                    out["models"] = [m.get("id") for m in r.json().get("data", [])][:10]
+                    data = r.json().get("data", [])[:10]
+                    out["models"] = [m.get("id") for m in data]
+                    out["served_names"] = out["models"]
+                    # capture the context limit so the UI can reject
+                    # input_len > max_model_len before wasting a run
+                    lens = [m.get("max_model_len") for m in data if m.get("max_model_len")]
+                    if lens:
+                        out["max_model_len"] = min(lens)
             except Exception:  # noqa: BLE001
                 pass
             try:
@@ -709,12 +721,15 @@ async def diagnosis(authorization: str = Header(default="")):
     add(True, "Sidecar 服务", f"运行中 · 版本 {SIDECAR_VERSION} · home={config.HOME}")
 
     if frozen:
-        add(True, "运行模式", "自包含打包模式 — Python / ais_bench / 全部依赖随包内置，无需外部环境")
         argv_prefix, child_mode = runner.resolve_command(store.get_setting("aisbench_command", ""))
         if child_mode:
+            add(True, "运行模式", "自包含打包模式 — Python / ais_bench / 全部依赖随包内置，无需外部环境")
             add(True, "AISBench（内置）", "随包内置，通过 --child-aisbench 自引用执行，无需安装")
         else:
-            add(True, "AISBench", f"使用自定义命令: {' '.join(argv_prefix)}")
+            add(True, "运行模式",
+                "打包模式 · 已被自定义命令覆盖 — 实际执行外部命令（不依赖内置运行时）")
+            add(True, "AISBench（自定义）", " ".join(argv_prefix),
+                "清空「压测执行 → aisbench 命令覆盖」可回到随包内置运行时")
         add(True, "Python（内置）", sys.version.split()[0])
     else:
         add(True, "运行模式", "开发模式 — 使用外部 Python 与 pip 安装的 ais_bench")

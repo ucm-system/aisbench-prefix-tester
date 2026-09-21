@@ -33,6 +33,7 @@ export default function ConfigPage() {
   const [check, setCheck] = useState<{ errors: string[]; warnings: string[] }>({ errors: [], warnings: [] });
   const [preview, setPreview] = useState<any>(null);
   const [probe, setProbe] = useState("");
+  const [maxLen, setMaxLen] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
 
   const connected = useConnected();
@@ -40,10 +41,13 @@ export default function ConfigPage() {
     if (!connected) return;
     api.get<Tok[]>("/api/tokenizers").then((t) => {
       setTokenizers(t);
-      setCfg((c) => ({ ...c, tokenizer: c.tokenizer || t[0]?.name || "" }));
+      setCfg((c) => ({ ...c, tokenizer: c.tokenizer || localStorage.getItem("pt-tokenizer") || t[0]?.name || "" }));
     }).catch(() => {});
     api.get<any[]>("/api/datasets").then(setDatasets).catch(() => {});
   }, [connected]);
+
+  // probe result is bound to one endpoint — drop it when the target changes
+  useEffect(() => { setMaxLen(null); }, [cfg.host_ip, cfg.host_port, cfg.url]);
 
   const set = (patch: Partial<typeof cfg>) => setCfg((c) => ({ ...c, ...patch }));
 
@@ -73,16 +77,25 @@ export default function ConfigPage() {
         set({ model_name: model });
         parts.push(`模型: ${model}`);
       }
+      if (r.max_model_len) {
+        setMaxLen(r.max_model_len);
+        parts.push(`上下文上限 ${r.max_model_len.toLocaleString()} tok`);
+      }
       setProbe(parts.join(" · "));
     } catch (e: any) {
       setProbe(`✗ 探测失败：${e.message}`);
     }
   };
 
-  const doValidate = async () => {
+  const doValidate = async (feedback = false) => {
     try {
       const r = await api.post<{ errors: string[]; warnings: string[] }>("/api/config/validate", { config: buildCfg() });
       setCheck(r);
+      if (feedback) {
+        if (r.errors.length) toast(`配置有误：${r.errors[0]}`);
+        else if (r.warnings.length) toast(`✓ 校验通过，${r.warnings.length} 条警告（见摘要卡）`);
+        else toast("✓ 校验通过");
+      }
       return r;
     } catch (e: any) {
       setCheck({ errors: [String(e.message || e)], warnings: [] });
@@ -108,6 +121,10 @@ export default function ConfigPage() {
   };
 
   const doStart = async () => {
+    if (maxLen != null && cfg.input_len + cfg.output_len > maxLen) {
+      toast(`无法开始：input_len ${cfg.input_len.toLocaleString()} + output_len ${cfg.output_len.toLocaleString()} 超过服务 max_model_len ${maxLen.toLocaleString()}（vLLM 将逐请求 400）。请降低输入/输出长度。`);
+      return;
+    }
     const v = await doValidate();
     if (v.errors.length) {
       toast(`配置有误：${v.errors[0]}`);
@@ -117,7 +134,7 @@ export default function ConfigPage() {
     try {
       const r = await api.post<{ run_id: string }>("/api/runs", {
         config: buildCfg(),
-        name: cfg.test_name || `run ${new Date().toLocaleString()}`,
+        name: rounds[0]?.test_name || cfg.test_name || `run ${new Date().toLocaleString()}`,
       });
       navigate(`/monitor/${r.run_id}`);
     } catch (e: any) {
@@ -170,7 +187,10 @@ export default function ConfigPage() {
               <input className="inp mono" value={cfg.model_path} onChange={(e) => set({ model_path: e.target.value })} data-t="model_path"
                 placeholder="D:\Models\Qwen3-32B" /></div>
             <div className="field" style={{ maxWidth: 150 }}><label>或选择预置 tokenizer</label>
-              <select className="sel" data-t="tokenizer" value={cfg.tokenizer} onChange={(e) => set({ tokenizer: e.target.value })}>
+              <select className="sel" data-t="tokenizer" value={cfg.tokenizer} onChange={(e) => {
+                set({ tokenizer: e.target.value });
+                localStorage.setItem("pt-tokenizer", e.target.value);
+              }}>
                 <option value="">（用模型目录）</option>
                 {tokenizers.map((t) => <option key={t.name} value={t.name}>{t.name}（{t.source}）</option>)}
               </select></div>
@@ -350,6 +370,7 @@ export default function ConfigPage() {
         <h3>摘要与体检</h3>
         <div className="summary-rows">
           <div className="sr"><span className="muted">目标服务</span><b className="mono" style={{ fontSize: 12 }}>{cfg.host_ip}:{cfg.host_port}</b></div>
+          {maxLen != null && <div className="sr"><span className="muted">服务上下文上限</span><b className="mono">{maxLen.toLocaleString()} tok</b></div>}
           <div className="sr"><span className="muted">输入 / 输出</span><b>{cfg.input_len.toLocaleString()} / {cfg.output_len.toLocaleString()} tok</b></div>
           <div className="sr"><span className="muted">数据量</span><b>{cfg.data_num} 条 × 前缀 {cfg.prefix_num}</b></div>
           <div className="sr"><span className="muted">重复率</span><b>{cfg.repeat_rate}</b></div>
@@ -357,6 +378,10 @@ export default function ConfigPage() {
           <div className="sr"><span className="muted">采集端点</span><b>{parsePods().length} 个</b></div>
           <div className="sr" style={{ borderBottom: "none" }}><span className="muted">轮次</span><b>{rounds.length} 轮</b></div>
         </div>
+        {maxLen != null && cfg.input_len + cfg.output_len > maxLen && (
+          <div className="alert error" style={{ marginTop: 12 }}>
+            <span>✕</span><div>input_len {cfg.input_len.toLocaleString()} + output_len {cfg.output_len.toLocaleString()} 超过服务 max_model_len {maxLen.toLocaleString()}，服务将对每个请求返回 400。请降低输入/输出长度。</div>
+          </div>)}
         {check.errors.length > 0 && (
           <div className="alert error" style={{ marginTop: 12 }}>
             <span>✕</span><div>{check.errors.map((e, i) => <div key={i}>{e}</div>)}</div>
@@ -370,9 +395,20 @@ export default function ConfigPage() {
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", gridColumn: "1 / -1" }}>
-        <button className="btn ghost" onClick={() => { setCfg({ ...DEFAULT_CFG }); setCheck({ errors: [], warnings: [] }); }}>重置</button>
-        <button className="btn" onClick={doValidate}>校验配置</button>
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-end", justifyContent: "flex-end", gridColumn: "1 / -1" }}>
+        <div className="field" style={{ flex: 1, maxWidth: 380, marginRight: "auto" }}>
+          <label>运行名称 <span className="sec-tag">显示在运行记录 / 对比 / SLA 历史中</span></label>
+          <input className="inp" data-t="run_name" value={rounds[0]?.test_name ?? ""}
+            placeholder="留空自动命名：run + 时间"
+            onChange={(e) => {
+              const v = e.target.value;
+              setRounds((rs) => (rs.length
+                ? rs.map((x, j) => (j === 0 ? { ...x, test_name: v } : x))
+                : [{ test_name: v }]));
+            }} />
+        </div>
+        <button className="btn ghost" onClick={() => { setCfg({ ...DEFAULT_CFG }); setRounds([{ test_name: "" }]); setCheck({ errors: [], warnings: [] }); }}>重置</button>
+        <button className="btn" onClick={() => doValidate(true)}>校验配置</button>
         <button data-t="start" className="btn primary" onClick={doStart} disabled={busy}>▶ 开始测试</button>
       </div>
     </div>

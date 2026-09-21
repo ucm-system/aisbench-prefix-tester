@@ -10,12 +10,13 @@ export default function SettingsPage() {
   const [theme, setTheme] = useState(localStorage.getItem("pt-theme") || "auto");
   const [regDir, setRegDir] = useState("");
   const [runtime, setRuntime] = useState<"" | "frozen" | "source">("");
+  const [home, setHome] = useState("");
 
   const load = () => {
     api.get<any>("/api/diagnosis").then((d) => setItems(d.items)).catch(() => setItems([]));
     api.get<Record<string, string>>("/api/settings").then(setSettings).catch(() => {});
-    api.get<{ runtime?: string }>("/api/health")
-      .then((h) => setRuntime((h.runtime as any) ?? "")).catch(() => {});
+    api.get<{ runtime?: string; home?: string }>("/api/health")
+      .then((h) => { setRuntime((h.runtime as any) ?? ""); setHome(h.home ?? ""); }).catch(() => {});
   };
   useEffect(() => {
     if (connected) load();
@@ -56,10 +57,21 @@ export default function SettingsPage() {
           {runtime === "frozen" ? (
             <>
               <div className="kv"><span>AISBench 运行时</span>
-                <b>内置自包含（Python + ais_bench 随包，无需配置）</b></div>
+                <b>{(() => {
+                  const c = (settings.aisbench_command ?? "").trim();
+                  return c && c !== "ais_bench" && !c.includes("--child-aisbench")
+                    ? "⚠ 自定义命令覆盖（未使用内置运行时）"
+                    : "内置自包含（Python + ais_bench 随包，无需配置）";
+                })()}</b></div>
+              <div className="field" style={{ marginBottom: 10 }}>
+                <label>aisbench 命令覆盖（留空 = 使用随包内置运行时；仅指向 mock/调试版时填写）</label>
+                <input className="inp mono" value={settings.aisbench_command ?? ""}
+                  placeholder="留空 = 内置运行时"
+                  onChange={(e) => set("aisbench_command", e.target.value)} />
+              </div>
               <div className="kv"><span>work_path</span><b>内置模式不需要</b></div>
               <div className="subnote" style={{ margin: "8px 0" }}>
-                高级：可在诊断页确认内置运行时；如需指向 mock/自定义命令，用「设置 → aisbench_command」接口覆盖（仅调试用）。
+                内置运行时通过 --child-aisbench 自引用执行；填入外部命令后，环境诊断会如实标注「已被自定义命令覆盖」。
               </div>
             </>
           ) : (
@@ -127,7 +139,7 @@ export default function SettingsPage() {
           <div className="kv"><span>应用</span><b>AISBench 前缀复用测试器</b></div>
           <div className="kv"><span>版本</span><b>v0.1.0</b></div>
           <div className="kv" style={{ borderBottom: "none" }}>
-            <span>数据目录</span><b className="mono" style={{ fontSize: 11 }}>%APPDATA%/AISBenchPrefixTester</b>
+            <span>数据目录</span><b className="mono" style={{ fontSize: 11 }}>{home || "…"}（app.db / outputs / datasets）</b>
           </div>
         </div>
       </div>

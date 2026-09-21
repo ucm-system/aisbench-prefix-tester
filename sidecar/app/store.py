@@ -77,6 +77,27 @@ def _migrate(con: sqlite3.Connection) -> None:
         " WHERE kind='sla' AND config_json NOT LIKE '%\"rounds\"%'")
 
 
+def reconcile_orphans() -> dict:
+    """Mark runs / SLA jobs left in a live state by an unclean shutdown.
+
+    Called once at sidecar startup: no runner handles can exist in a fresh
+    process, so any row still pending/running is stale bookkeeping from the
+    previous process (e.g. app killed mid-run). Without this the UI shows a
+    forever-"running" zombie while the SLA page correctly says interrupted.
+    """
+    with _LOCK:
+        con = connect()
+        now = time.time()
+        runs = con.execute(
+            "UPDATE runs SET status='interrupted', finished_at=COALESCE(finished_at, ?)"
+            " WHERE status IN ('pending','running')", (now,)).rowcount
+        jobs = con.execute(
+            "UPDATE sla_jobs SET state='interrupted'"
+            " WHERE state IN ('pending','running','ladder','bisect')").rowcount
+        con.commit()
+    return {"runs": runs, "sla_jobs": jobs}
+
+
 def _row_to_dict(row: sqlite3.Row | None) -> dict | None:
     return {k: row[k] for k in row.keys()} if row is not None else None
 

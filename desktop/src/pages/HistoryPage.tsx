@@ -4,10 +4,11 @@ import { navigate, useToast } from "../App";
 
 const STATUS_COLOR: Record<string, string> = {
   completed: "var(--green)", running: "var(--brand)", failed: "var(--danger)",
-  cancelled: "var(--muted)", pending: "var(--warn)",
+  cancelled: "var(--muted)", pending: "var(--warn)", interrupted: "var(--warn)",
 };
 const STATUS_TEXT: Record<string, string> = {
-  completed: "已完成", running: "运行中", failed: "失败", cancelled: "已停止", pending: "排队中",
+  completed: "已完成", running: "运行中", failed: "失败", cancelled: "已停止",
+  pending: "排队中", interrupted: "已中断",
 };
 
 const KIND_CHIPS = [
@@ -104,7 +105,7 @@ export default function HistoryPage() {
               <input type="checkbox" checked={allSel}
                 onChange={(e) => setSel(e.target.checked ? new Set(runs.map((r) => r.run_id)) : new Set())} />
             </th>
-            <th>名称 / run_id</th><th>时间</th>
+            <th>名称 / run_id</th><th>状态</th><th>时间</th>
             <th>HBM</th><th>Ext</th><th>TTFT avg</th><th>吞吐</th><th>轮次</th><th style={{ width: 210 }}></th>
           </tr></thead>
           <tbody>
@@ -117,6 +118,8 @@ export default function HistoryPage() {
                   {kind === "" && r.kind === "sla" ? <span className="tag blue" style={{ padding: "1px 7px", marginLeft: 6 }}>SLA</span> : null}
                   {r.is_practice ? <span className="tag warn" style={{ padding: "1px 7px", marginLeft: 6 }}>练习轮</span> : null}
                   <br /><span className="muted mono" style={{ fontSize: 11 }}>{r.run_id}</span></td>
+                <td><span style={{ color: STATUS_COLOR[r.status] ?? "var(--text2)", fontSize: 12 }}>
+                  {STATUS_TEXT[r.status] ?? r.status}</span></td>
                 <td>{fmtTime(r.created_at)}</td>
                 <td><b>{r.summary ? `${(r.summary.hbm_hit_rate * 100).toFixed(1)}%` : "—"}</b></td>
                 <td><b style={{ color: "var(--ext)" }}>{r.summary ? `${(r.summary.ext_hit_rate * 100).toFixed(1)}%` : "—"}</b></td>
@@ -142,22 +145,31 @@ export default function HistoryPage() {
           <div>
             <b style={{ fontSize: 14 }}>{detail?.name}</b>
             <div className="muted mono" style={{ fontSize: 11, marginTop: 2 }}>
-              {detail?.run_id} · {detail?.status} · {detail?.rounds?.length ?? 0} 阶段
+              {detail?.run_id} · <span style={{ color: STATUS_COLOR[detail?.status] ?? "inherit" }}>{STATUS_TEXT[detail?.status] ?? detail?.status}</span> · {detail?.rounds?.length ?? 0} 阶段
             </div>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", gap: 7 }}>
+            <button className="btn sm ghost" onClick={() => setOpen(false)}>✕</button>
             <a className="btn sm" href={detail ? downloadLink(`/api/runs/${detail.run_id}/export?format=xlsx`) : "#"}>xlsx</a>
             <a className="btn sm" href={detail ? downloadLink(`/api/runs/${detail.run_id}/export?format=html`) : "#"}>HTML 报告</a>
+            <button className="btn sm" disabled={sel.size < 2} onClick={() => { setOpen(false); compareSel(); }}>
+              ⇄ 对比所选{sel.size >= 2 ? `（${sel.size}）` : ""}
+            </button>
             <button className="btn sm primary" onClick={async () => {
+              if (!detail.is_practice && !confirm("标记为练习轮后，对比分析默认会排除该记录。确认标记？")) return;
               await api.patch(`/api/runs/${detail.run_id}`, { is_practice: !detail.is_practice });
               toast(detail.is_practice ? "已取消练习轮标记" : "已标记为练习轮（对比默认排除）");
               const d = await api.get<any>(`/api/runs/${detail.run_id}`);
               setDetail(d); load();
             }}>{detail?.is_practice ? "取消练习标记" : "标记练习轮"}</button>
-            <button className="btn sm ghost" onClick={() => setOpen(false)}>✕</button>
           </div>
         </div>
         <div className="drawer-body">
+          {(detail?.rounds ?? []).some((r: any) => r.warnings) && (
+            <div className="alert warn" style={{ padding: 10, marginBottom: 12 }}>
+              <span>⚠</span>
+              <div>本次运行存在警告（例如轮间前缀缓存清理失败，多轮结果可能被残留缓存污染）。逐轮警告见下方结果表「警告」列。</div>
+            </div>)}
           <div className="card" style={{ padding: 12, marginBottom: 12 }}>
             <div className="chart-head" style={{ marginBottom: 4 }}><b style={{ fontSize: 12 }}>轮 × 阶段结果</b></div>
             <table className="mini-table">

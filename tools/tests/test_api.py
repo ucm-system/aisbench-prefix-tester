@@ -222,6 +222,24 @@ def test_run_detail_404():
     print("run detail 404 OK")
 
 
+def test_reconcile_orphans():
+    """Runs/SLA jobs left 'running' by a killed process must become interrupted
+    at startup — no more forever-running zombies contradicting the SLA page."""
+    rid = store.create_run(RUN_CFG, name="zombie-reconcile")
+    store.update_run(rid, status="running")
+    store.save_sla_job({"job_id": "zjob-reconcile", "state": "running", "sla": {}})
+    out = store.reconcile_orphans()
+    assert out["runs"] >= 1 and out["sla_jobs"] >= 1, out
+    assert store.get_run(rid)["status"] == "interrupted"
+    assert store.get_run(rid)["finished_at"] > 0
+    assert store.get_sla_job("zjob-reconcile")["state"] == "interrupted"
+    # idempotent: a second pass finds nothing left to fix
+    again = store.reconcile_orphans()
+    assert again == {"runs": 0, "sla_jobs": 0}, again
+    store.delete_run(rid)
+    print("reconcile orphans OK")
+
+
 def main():
     global c
     with TestClient(app) as client:
@@ -241,6 +259,7 @@ def main():
         test_datasets_preview()
         test_diagnosis_runtime_ready()
         test_run_detail_404()
+        test_reconcile_orphans()
     print("ALL API TESTS PASSED")
 
 
