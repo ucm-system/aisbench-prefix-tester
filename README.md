@@ -2,7 +2,8 @@
 
 面向大模型推理服务的 **Prefix Cache 性能测试桌面工具**：随机词表数据集纯合成、AISBench 两阶段压测编排、
 UCM/vLLM 命中率实时采集、多轮对比报告、SLA 最大并发自动搜索。
-**打包版完全自包含**——Python、ais_bench、全部依赖与 tokenizer 资产随包内置，目标机器无需任何环境。
+**打包版完全自包含**——Python、ais_bench、全部依赖随包内置，目标机器无需任何环境；
+tokenizer 采用「安装包内置核心双件 + 可选扩展包」的分发方式（见下文 [Tokenizer 资产](#tokenizer-资产)）。
 
 <p align="center">
   <img src="docs/screenshots/s07-monitor-real-dark.png" width="880" alt="运行监控">
@@ -18,7 +19,7 @@ UCM/vLLM 命中率实时采集、多轮对比报告、SLA 最大并发自动搜�
 - **SLA 自动调优**：并发 ×2 阶梯 + 二分细化；**预检快失败**（并发=1 即不满足时拒绝运行并附实测证据）、矛盾/非法阈值拒绝、探针日志实时跟随、历史记录与状态恢复
 - **对比与报告**：多 run 对比（自动排除预埋/练习轮，方向感知增量，导出与页面口径一致）→ xlsx（5 Sheet）与离线 HTML 报告
 - **运行管理**：类型筛选（手动/SLA 探针）、单条与批量删除、勾选直通对比、跨重启持久化
-- **部署形态**：Windows 安装版（秒开）/ 便携 exe（单文件免安装）/ 服务器 Docker 容器（UI + API 同容器），三种形态数据目录互通、均自包含
+- **部署形态**：Windows 安装版（秒开）/ 便携 exe（单文件免安装）/ 服务器 Docker 容器（UI + API 同容器），三种形态数据目录互通、均自包含；tokenizer 库以可选扩展包分发（66 个官方仓 tokenizer 一键解压注册）
 
 ## 截图
 
@@ -48,14 +49,16 @@ Sidecar 仅绑定 `127.0.0.1`，Bearer token + 端口文件发现；目标服务
 
 ```bash
 pip install pyinstaller
-cd sidecar && py -3.11 -m PyInstaller aisbench-sidecar.spec        # 自包含 sidecar（内嵌 ais_bench/tokenizer 资产）
+cd sidecar && py -3.11 -m PyInstaller aisbench-sidecar.spec        # 自包含 sidecar（内嵌 ais_bench + 核心 tokenizer）
 cd ../desktop && npm install && npm run build
 npx electron-builder --win --publish never                          # 注意先关掉旧实例，避免输出文件被锁
+py -3.11 tools/make_tokenizer_pack.py                               # 另出 Tokenizer 扩展包 zip 到 D:\pt-release
 ```
 
-- **安装版** `AISBenchPrefixTester-Setup-<版本>.exe`：标准 Windows 安装向导（中文界面，**可选择安装目录**、桌面/开始菜单快捷方式、完成后运行、控制面板可卸载且保留数据），安装后**秒开**——日常使用推荐
+- **安装版** `AISBenchPrefixTester-Setup-<版本>.exe`：标准 Windows 安装向导（中文界面，**可选择安装目录**、桌面/开始菜单快捷方式、完成后运行、控制面板可卸载且保留数据），安装后**秒开**——日常使用推荐；内置 Qwen3-0.6B 与 Qwen3.5-0.8B 两个核心 tokenizer，开箱即用
 - **便携版** `AISBenchPrefixTester-Portable.exe`：单文件免安装，适合分发/U 盘场景；每次启动需解压（约 30 秒）
-- 两者数据目录通用（`%USERPROFILE%\AISBenchPrefixTester`），历史记录无缝衔接；均自包含（Python + ais_bench + 全部依赖内置），目标机器无需任何环境
+- **Tokenizer 扩展包** `AISBenchPrefixTester-Tokenizers-<版本>.zip`：其余 66 个官方仓 tokenizer（Qwen 全系尺寸 / GLM / DeepSeek-V4 / Kimi / MiniMax / gemma / gpt-oss / 混元 / MiMo 等），解压到数据目录即自动注册——见下文
+- 安装版与便携版数据目录通用（`%USERPROFILE%\AISBenchPrefixTester`），历史记录无缝衔接；均自包含（Python + ais_bench + 全部依赖内置），目标机器无需任何环境
 
 ### 服务器容器（UI + API 同容器）
 
@@ -79,9 +82,36 @@ cd desktop && npm run dev      # http://localhost:5173（vite 自动拉起 sidec
 
 ## Tokenizer 资产
 
+### 分发方式（v0.2.1 起）
+
+| 产物 | 内容 |
+| --- | --- |
+| 安装包 / 便携包 | 内置 **Qwen3-0.6B**（默认）与 **Qwen3.5-0.8B**（UCM 测试用）两个核心 tokenizer，开箱即用 |
+| **Tokenizer 扩展包** zip | 其余 **66 个** ModelScope 官方组织 tokenizer：Qwen 全系尺寸（2 / 2.5 / 3 / 3.5 / 3.6 / 3.8 / Coder / 2.4T）、GLM 全系（4 ~ 5.3）、DeepSeek-V4 系、Kimi 全系（K2 ~ K3）、MiniMax（M1 ~ M3）、gemma-4、gpt-oss、混元 Hy3/Hy4、MiMo、Muse-Glimmer、openPangu、Ling 等 |
+
+**扩展包安装**：把 zip 内全部目录解压到 `%USERPROFILE%\AISBenchPrefixTester\assets\tokenizers\`
+（解压后该目录下应直接出现 `Qwen3-8B\`、`GLM-5\` 等文件夹），应用启动自动注册；
+建议在「设置 → Tokenizer 资产」点「测试加载」验证（词表大小 + 中文编码往返）。该目录优先于内置资产，
+重复名称以扩展包为准。逐文件 SHA256 与来源仓库见包内 `manifest.json`。
+
+### transformers 版本兼容（如实说明）
+
+应用内置 **transformers 5.17.0**，由此产生三类兼容性，均经逐目录实测：
+
+1. **需要 transformers ≥5.0 的模型**（GLM-5.x、混元 Hy4-preview、Muse-Glimmer-30B，使用 v5 的
+   `TokenizersBackend` 类）：**应用内正常使用**；若你用源码模式且锁 4.x，这些目录会加载失败。
+2. **在 5.17 下有上游中文编码 bug 的模型**：**DeepSeek-V3 / V3.1 / V3.2 / R1**（中文编码为 0 个
+   token）与 **Step-3.5 / 3.7-Flash**（10 个汉字塌缩为 1 个 token）——加载"成功"但编码已损坏，
+   会静默毁掉数据集。因此它们**既不进安装包也不进扩展包**；「测试加载」对这类目录会明确报错
+   （含原因与建议）。这两个家族属上一代模型，现阶段已很少作为压测目标；如确有需要，请在源码模式
+   安装 transformers 4.57.x 使用（文件本身经 tokenizers 库直载验证无误）。注意 **DeepSeek-V4 系不受
+   此 bug 影响**，正常随扩展包分发。
+3. **其余 60+ 目录**在 4.57 与 5.17 双版本下均正常（双版本冒烟实测）。
+
+### 自行扩充
+
 把 HuggingFace 格式 tokenizer 目录放进 `assets/model/<名字>/`（仓库打包暂存区，不进 git），
 应用自动注册；或运行时在「设置 → Tokenizer 资产」注册任意本机目录。
-`assets/model` 已随附 Qwen3.5-0.8B 与 Qwen3-0.6B 四件套（SHA256 与 ModelScope 官方仓逐字节核对）。
 
 从 ModelScope 下载新 tokenizer（直链 / CLI / SDK 三种方式、最小文件集、家族等价性结论）：
 **[docs/MODELSCOPE_TOKENIZER.md](docs/MODELSCOPE_TOKENIZER.md)**

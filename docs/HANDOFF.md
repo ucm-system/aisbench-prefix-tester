@@ -251,3 +251,15 @@
 - 亲测证实：**Step-3.5/3.7-Flash 在 5.17 下把 10 个汉字塌缩成 1 个 token（id=[0]）**——非空但错误，原有「非空探针」拦不住；**DeepSeek-V4 系正常（zh=5）**，损坏的只有 V3/V3.1/V3.2/R1。
 - `verify()` 探针加严：10 字互异汉字样本 <2 token 即报错（0 个与 1 个塌缩两种形态都拦）。现拦截矩阵：Step×2 + DeepSeek-V3/R1×4 全拦，V4 系/Kimi-K3/GLM-5.3/gemma-4/MiMo/Hy3/gpt-oss 全过，74/74 注册。
 - spec 黑名单精确化：`DeepSeek-V3* / DeepSeek-R1 / Step-*`（V4 系保留入库）；未来全量打包估算 ≈ 392 + 1032 ≈ **1.42GB**。assets/ 不入库（.gitignore）。
+
+### 第十四轮（v0.2.1 发版：精简安装包 + Tokenizer 扩展包 + README 诚实化）
+
+产品决策：安装包不塞 1GB tokenizer 库，改为「核心内置 + 可选扩展包」双产物分发。
+
+- **安装包瘦身**：spec 从「排除黑名单全量打包」改为**核心白名单**——只内嵌 Qwen3-0.6B（默认）+ Qwen3.5-0.8B（UCM 测试），安装包维持 ~392MB；sentencepiece/tiktoken 隐式依赖保留（冻结态加载扩展包的 Kimi/老 ChatGLM 必需，onedir +34MB 是其代价）。
+- **扩展包**：新增 `tools/make_tokenizer_pack.py` → `AISBenchPrefixTester-Tokenizers-0.2.1.zip`（**237MB**，66 目录 / 1062MB 原始，ZIP_DEFLATED-9）；排除 5.17-CJK-broken 六目录与核心双件；内含 manifest/README/安装说明.txt。落位 `<数据目录>\assets\tokenizers\`。
+- **扫描根扩展**（config.py）：`assets_dir()`（HOME/assets/tokenizers）加入 `default_tokenizer_candidates()` 且排在 bundle 之前——扩展包同名覆盖内置。
+- **README 诚实化**：tokenizer 分发表（内置核心 vs 扩展包 66 目录）+ transformers 兼容矩阵如实说明（内置 5.17.0；GLM-5.x/Hy4/Muse 需 ≥5.0 应用内可用；DeepSeek-V3/V3.1/V3.2/R1 与 Step-3.5/3.7-Flash 因 5.17 上游 CJK bug 双包均不发、UI 明确报错、属上一代模型现已少用、确需走源码模式锁 4.57.x；DeepSeek-V4 不受影响随包分发；其余 60+ 双版本通）。
+- 版本 0.2.1（package.json / version.py / 侧栏 / 关于 四处对齐）。
+- **验收**：battery 21/21（lean bundle）；冻结态扩展包集成测试（静默装 0.2.1 → `--data-dir` 隔离 → 解压扩展包 → 启动）：注册 **68/68**（66 包 + 2 内置）、DeepSeek-V3/Step 确认缺席、Kimi-K3/glm-4-9b-chat/DeepSeek-V4/GLM-5/Qwen3-8B/gemma-4 六代表 `verify ok=True` 且中文探针非空（tiktoken/sentencepiece 冻结态链路打通）、静默卸载干净；test_portable 7/7；tsc 0 错误。
+- **产物**（D:\pt-release）：`AISBenchPrefixTester-Setup-0.2.1.exe`（392.5MB，标准向导可选路径）、`AISBenchPrefixTester-Portable.exe`（392.4MB）、`AISBenchPrefixTester-Tokenizers-0.2.1.zip`（237.3MB）。

@@ -149,7 +149,7 @@ export default function App() {
             {connected ? "● 已连接" : "○ 连接中"}
           </span>
           <br />
-          前缀复用测试器 v0.2.0
+          前缀复用测试器 v0.2.1
         </div>
       </aside>
 

@@ -16,23 +16,23 @@ if not os.path.isdir(_ab_configs):
     raise SystemExit(f'ais_bench configs dir not found: {_ab_configs}')
 
 # bundled tokenizer assets (../assets/model/<name>/...) if present.
-# Curated per-directory bundling:
-#   - EXCLUDED (CJK encoding broken on the bundled transformers 5.17.x, loads
-#     fine but encodes Chinese to 0 or 1 tokens — silent dataset corruption):
-#     DeepSeek-V3/V3.1/V3.2/R1 (LlamaTokenizer family) and Step-3.5/3.7-Flash
-#     (collapses to token 0). DeepSeek-V4* verified SANE on 5.17 — included.
-#   - root smoke evidence (smoke_*.jsonl) stays out; manifest/README ship.
+# v0.2.1 release split: the installer ships ONLY the core pair — the default
+# pick (Qwen3-0.6B) and the UCM-test tokenizer (Qwen3.5-0.8B) — to stay lean;
+# the rest of the library ships as the separate Tokenizer Extension Pack zip
+# (tools/make_tokenizer_pack.py; extract to <data>/assets/tokenizers/ which
+# is auto-registered and wins over bundled copies).
+# NOT shipped anywhere (upstream transformers-5.17 CJK bug: Chinese encodes to
+# 0 or 1 tokens while loading "succeeds"): DeepSeek-V3/V3.1/V3.2/R1,
+# Step-3.5/3.7-Flash. DeepSeek-V4* is verified SANE on 5.17 and ships in the
+# pack. Root smoke evidence (smoke_*.jsonl) stays out; manifest/README ship.
+_BUNDLED_CORE = ('Qwen3-0.6B', 'Qwen3.5-0.8B')
 _asset_model = os.path.join('..', 'assets', 'model')
-_BROKEN_5_17 = ('DeepSeek-V3', 'DeepSeek-R1', 'Step-')
 _asset_datas = []
 if os.path.isdir(_asset_model):
-    for _name in sorted(os.listdir(_asset_model)):
+    for _name in _BUNDLED_CORE:
         _sub = os.path.join(_asset_model, _name)
-        if not os.path.isdir(_sub):
-            continue
-        if any(_name.startswith(_p) for _p in _BROKEN_5_17):
-            continue
-        _asset_datas.append((_sub, os.path.join('assets', 'model', _name)))
+        if os.path.isdir(_sub):
+            _asset_datas.append((_sub, os.path.join('assets', 'model', _name)))
     for _rootfile in ('manifest.json', 'README.md'):
         _rf = os.path.join(_asset_model, _rootfile)
         if os.path.isfile(_rf):

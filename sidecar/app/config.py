@@ -90,9 +90,13 @@ def _looks_like_tokenizer_dir(child: Path) -> bool:
 
 
 def default_tokenizer_candidates() -> list[dict]:
-    """First-party tokenizer sources: user's local D:\\Models plus bundled assets."""
+    """First-party tokenizer sources: user's local D:\\Models, the extension
+    pack drop dir (<home>/assets/tokenizers), plus bundled assets."""
     found: list[dict] = []
-    roots = [Path("D:/Models"), assets_dir().parent.parent, Path.home() / "models"]
+    # assets_dir() (extension-pack drop location) is scanned BEFORE the bundle
+    # so an extracted pack wins on name collisions with bundled copies
+    roots = [Path("D:/Models"), assets_dir(), assets_dir().parent.parent,
+             Path.home() / "models"]
     bundle = bundled_assets_model_dir()
     if bundle:
         roots.append(bundle)
