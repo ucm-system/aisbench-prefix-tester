@@ -113,7 +113,7 @@ export default function MonitorPage({ route }: { route: string }) {
     const hbm: number[] = [], ext: number[] = [], comp: number[] = [];
     const run: number[] = [], wait: number[] = [], kv: number[] = [], swap: number[] = [];
     const genRate: number[] = [], promptRate: number[] = [], ttftT: number[] = [], tpotT: number[] = [];
-    const ucmLoadBw: number[] = [], ucmDumpBw: number[] = [];
+    const ucmLoadBw: number[] = [], ucmDumpBw: number[] = [], posixRate: number[] = [];
     let prev = samples[0]?.flat;
     let prevTs = samples[0]?.ts;
     for (const s of samples) {
@@ -138,6 +138,9 @@ export default function MonitorPage({ route }: { route: string }) {
       tpotT.push(di > 0 ? ((f.itl_sum - prev.itl_sum) / di) * 1000 : NaN);
       ucmLoadBw.push(prev && dt > 0 ? Math.max(0, ((f.ucm_cache_load ?? 0) - (prev.ucm_cache_load ?? 0)) / dt / 1e9) : 0);
       ucmDumpBw.push(prev && dt > 0 ? Math.max(0, ((f.ucm_cache_dump ?? 0) - (prev.ucm_cache_dump ?? 0)) / dt / 1e9) : 0);
+      const dpq = prev ? f.posix_q_blk - prev.posix_q_blk : 0;
+      const dph = prev ? f.posix_hit_blk - prev.posix_hit_blk : 0;
+      posixRate.push(dpq > 0 ? (dph / dpq) * 100 : NaN);
       prev = f; prevTs = s.ts;
     }
     const clean = (a: number[]) => a.map((v) => (Number.isFinite(v) ? v : 0));
@@ -145,7 +148,8 @@ export default function MonitorPage({ route }: { route: string }) {
              run: clean(run), wait: clean(wait), swap: clean(swap), kv: clean(kv),
              genRate: clean(genRate), promptRate: clean(promptRate),
              ttftT: clean(ttftT), tpotT: clean(tpotT),
-             ucmLoadBw: clean(ucmLoadBw), ucmDumpBw: clean(ucmDumpBw) };
+             ucmLoadBw: clean(ucmLoadBw), ucmDumpBw: clean(ucmDumpBw),
+             posixRate: clean(posixRate) };
   }, [samples]);
 
   // time-axis labels: grid index 0..4 -> sample timestamp (5s cadence => real clock)
@@ -166,12 +170,27 @@ export default function MonitorPage({ route }: { route: string }) {
   const agg = phaseRate?.agg ?? {};
   const ttft = latest.ttft_cnt ? (latest.ttft_sum / latest.ttft_cnt) * 1000 : (detail ? (detail.rounds ?? []).filter((r: any) => r.phase === "full").at(-1)?.metrics?.ttft_avg_ms ?? 0 : 0);
 
-  const donutItems = [
-    { v: +(latest.ucm_q_tok ? ((latest.ucm_hbm_tok ?? 0) / latest.ucm_q_tok) * 100 : agg.hbm_hit_rate * 100 || 0).toFixed(1), c: HBM },
-    { v: +(latest.ucm_q_tok ? ((latest.ucm_hit_tok ?? 0) / latest.ucm_q_tok) * 100 : agg.ext_hit_rate * 100 || 0).toFixed(1), c: UCMC },
-  ];
-  const missV = Math.max(0, 100 - donutItems[0].v - donutItems[1].v);
-  donutItems.push({ v: +missV.toFixed(1), c: "#5a5e66" });
+  // UCM hit breakdown (token 口径, 参考 grafana_vllm "Prefix Cache Query
+  // Breakdown"); vLLM-only fallback: 阶段快照命中率构成. Zero-guard: no data
+  // -> no donut (之前 0 分母退化成 100%).
+  const qTok = latest.ucm_q_tok ?? 0;
+  const hTok = latest.ucm_hbm_tok ?? 0;
+  const uTok = latest.ucm_hit_tok ?? 0;
+  const hbmPct = (agg.hbm_hit_rate ?? 0) * 100;
+  const extPct = (agg.ext_hit_rate ?? 0) * 100;
+  const ucmTokens = ucm === true && qTok > 0;
+  const donutItems = ucmTokens
+    ? [
+        { v: +((hTok / qTok) * 100).toFixed(1), c: HBM },
+        { v: +((uTok / qTok) * 100).toFixed(1), c: UCMC },
+        { v: +(Math.max(0, qTok - hTok - uTok) / qTok * 100).toFixed(1), c: "#5a5e66" },
+      ]
+    : [
+        { v: +hbmPct.toFixed(1), c: HBM },
+        { v: +extPct.toFixed(1), c: UCMC },
+        { v: +Math.max(0, 100 - hbmPct - extPct).toFixed(1), c: "#5a5e66" },
+      ];
+  const donutReady = ucmTokens ? qTok > 0 : phaseRate != null;
 
   const shownLogs = logs.filter((l) =>
     filter === "all" ? true : filter === "warn" ? l.warn || l.err : l.err);
@@ -314,12 +333,13 @@ export default function MonitorPage({ route }: { route: string }) {
                 ? <LineChart series={[
                     { data: trend.hbm, color: HBM, area: true },
                     { data: trend.ext, color: EXT },
+                    { data: trend.posixRate, color: "#73BF69" },
                     { data: trend.comp, color: UCMC, dash: true }]} yMax={100} height={200}
                     fmt={(v) => `${v}%`} xLabel={timeX} />
                 : <div className="subnote">等待指标采样…</div>}
             </div>
             <div className="card">
-              <div className="chart-head"><b>Token 流向 / UCM</b>
+              <div className="chart-head"><b>Prefix Cache Query Breakdown</b>
                 {ucm != null && <span className={`tag ${ucm ? "purple" : "warn"}`} style={{ fontSize: 10 }}>{ucm ? "ucm: 已检测" : "未检测到 ucm:"}</span>}
               </div>
               {ucm === false && (
@@ -327,11 +347,25 @@ export default function MonitorPage({ route }: { route: string }) {
                   <span>⚠</span><div>服务 /metrics 中未发现 ucm: 前缀指标——可能未启用 UCM 或未暴露，仅展示 vLLM 原生指标。</div>
                 </div>)}
               <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-                <Donut items={donutItems} caption="query 构成" />
+                {donutReady ? (
+                  <Donut items={donutItems} caption={ucmTokens ? "query 构成（tokens）" : "命中率构成（阶段快照）"} />
+                ) : (
+                  <div className="subnote" style={{ width: 132, textAlign: "center" }}>等待阶段<br />完成…</div>
+                )}
                 <div style={{ flex: 1 }}>
-                  <div className="kv"><span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: HBM, marginRight: 7 }} />HBM 命中 tokens</span><b>{Math.round(latest.ucm_hbm_tok ?? 0).toLocaleString()}</b></div>
-                  <div className="kv"><span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: UCMC, marginRight: 7 }} />UCM 命中 tokens</span><b>{Math.round(latest.ucm_hit_tok ?? 0).toLocaleString()}</b></div>
-                  <div className="kv"><span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "#5a5e66", marginRight: 7 }} />查询总量 tokens</span><b>{Math.round(latest.ucm_q_tok ?? 0).toLocaleString()}</b></div>
+                  {ucmTokens ? (
+                    <>
+                      <div className="kv"><span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: HBM, marginRight: 7 }} />HBM 命中 tokens</span><b>{Math.round(hTok).toLocaleString()}</b></div>
+                      <div className="kv"><span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: UCMC, marginRight: 7 }} />UCM 命中 tokens</span><b>{Math.round(uTok).toLocaleString()}</b></div>
+                      <div className="kv"><span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "#5a5e66", marginRight: 7 }} />Miss tokens</span><b>{Math.round(Math.max(0, qTok - hTok - uTok)).toLocaleString()}</b></div>
+                      <div className="kv"><span>查询总量 tokens</span><b>{Math.round(qTok).toLocaleString()}</b></div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="kv"><span>HBM 命中率（阶段快照）</span><b>{hbmPct.toFixed(1)}%</b></div>
+                      <div className="kv"><span>Ext 命中率（阶段快照）</span><b>{extPct.toFixed(1)}%</b></div>
+                    </>
+                  )}
                   {latest.posix_cap ? (
                     <div className="kv"><span>Posix 存储占用</span>
                       <b>{(latest.posix_used / latest.posix_cap * 100).toFixed(1)}%</b></div>
