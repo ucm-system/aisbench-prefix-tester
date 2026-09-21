@@ -448,8 +448,10 @@ def _run_phase(handle: RunHandle, argv_prefix: list[str], args: list[str],
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     # ais_bench tables/中文 come out in the child's console encoding on Windows;
-    # force UTF-8 so our utf-8 decode never produces U+FFFD mojibake
+    # UTF-8 mode forces ALL open()/stdio to UTF-8 (else GBK decodes crash the
+    # child's summary pass on UTF-8 bytes)
     env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
     env["AISBENCH_PT_WORK"] = work_path  # workspace root (mock_aisbench reads it)
     # benchmark traffic must reach the service directly: kill proxy env vars and
     # the Windows registry proxy that requests/urllib would otherwise honor

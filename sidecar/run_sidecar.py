@@ -9,9 +9,27 @@ if os.path.isdir(_compat):
     sys.path.insert(0, _compat)
 
 
+def _force_utf8_open() -> None:
+    """Frozen children run with the Windows locale codec (GBK on zh-CN) because
+    PyInstaller ignores PYTHONUTF8/PYTHONIOENCODING. Every file in this
+    pipeline is UTF-8, so default implicit open() calls to UTF-8 for
+    script-mode children (ais_bench reads/writes debug jsonl via bare open())."""
+    import builtins
+
+    orig_open = builtins.open
+
+    def open_utf8(file, mode="r", *args, **kwargs):
+        if "b" not in mode and "encoding" not in kwargs:
+            kwargs["encoding"] = "utf-8"
+        return orig_open(file, mode, *args, **kwargs)
+
+    builtins.open = open_utf8
+
+
 def _run_aisbench_child():
     """packaged exe re-invokes itself with --child-aisbench to run the
     bundled ais_bench CLI in-process."""
+    _force_utf8_open()
     idx = sys.argv.index("--child-aisbench")
     sys.argv = ["ais_bench"] + sys.argv[idx + 1:]
     from ais_bench.benchmark.cli.main import main as aisbench_main
@@ -37,6 +55,7 @@ def _run_script_child():
     __main__, mirroring `python <script> <cfg>` semantics."""
     import runpy
 
+    _force_utf8_open()
     script = sys.argv[1]
     sys.argv = sys.argv[1:]
     runpy.run_path(script, run_name="__main__")

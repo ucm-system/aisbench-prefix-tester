@@ -744,8 +744,10 @@ async def diagnosis(authorization: str = Header(default="")):
     try:
         import transformers
         add(True, "transformers", f"v{transformers.__version__}（GLM 系列词表需 ≥5.0，其余 4.x 可用）")
-    except ImportError:
-        add(False, "transformers", "未安装" if not frozen else "内置 transformers 缺失",
+    except Exception as exc:  # noqa: BLE001 — surface the REAL import failure
+        add(False, "transformers",
+            ("内置 transformers 导入失败: " if frozen else "未安装: ")
+            + f"{type(exc).__name__}: {exc}"[:260],
             "" if frozen else "pip install transformers>=4.40")
 
     toks = tokenizer_mgr.list_tokenizers()

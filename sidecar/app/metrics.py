@@ -49,6 +49,13 @@ WHITELIST = {
     "ucm:posix_lookup_hit_blocks_total": "posix_hit_blk",
     "ucm:load_bytes_total": "ucm_load_bytes",
     "ucm:save_bytes_total": "ucm_save_bytes",
+    # UCM storage usage + bandwidth (metrics_lite 口径)
+    "ucm:cache_load_bytes_total": "ucm_cache_load",
+    "ucm:cache_dump_bytes_total": "ucm_cache_dump",
+    "ucm:posix_s2h_bytes_total": "ucm_posix_s2h",
+    "ucm:posix_h2s_bytes_total": "ucm_posix_h2s",
+    "ucm:posix_store_used_bytes": "posix_used",
+    "ucm:posix_store_capacity_bytes": "posix_cap",
     "posix_store_health": "posix_health",
     "mooncake_store_health": "mooncake_health",
     "yuanrong_dram_usage_ratio": "yr_dram_ratio",

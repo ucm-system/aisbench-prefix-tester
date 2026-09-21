@@ -113,6 +113,7 @@ export default function MonitorPage({ route }: { route: string }) {
     const hbm: number[] = [], ext: number[] = [], comp: number[] = [];
     const run: number[] = [], wait: number[] = [], kv: number[] = [], swap: number[] = [];
     const genRate: number[] = [], promptRate: number[] = [], ttftT: number[] = [], tpotT: number[] = [];
+    const ucmLoadBw: number[] = [], ucmDumpBw: number[] = [];
     let prev = samples[0]?.flat;
     let prevTs = samples[0]?.ts;
     for (const s of samples) {
@@ -135,13 +136,16 @@ export default function MonitorPage({ route }: { route: string }) {
       ttftT.push(dc > 0 ? ((f.ttft_sum - prev.ttft_sum) / dc) * 1000 : NaN);
       const di = prev ? f.itl_cnt - prev.itl_cnt : 0;
       tpotT.push(di > 0 ? ((f.itl_sum - prev.itl_sum) / di) * 1000 : NaN);
+      ucmLoadBw.push(prev && dt > 0 ? Math.max(0, ((f.ucm_cache_load ?? 0) - (prev.ucm_cache_load ?? 0)) / dt / 1e9) : 0);
+      ucmDumpBw.push(prev && dt > 0 ? Math.max(0, ((f.ucm_cache_dump ?? 0) - (prev.ucm_cache_dump ?? 0)) / dt / 1e9) : 0);
       prev = f; prevTs = s.ts;
     }
     const clean = (a: number[]) => a.map((v) => (Number.isFinite(v) ? v : 0));
     return { hbm: clean(hbm), ext: clean(ext), comp: clean(comp),
              run: clean(run), wait: clean(wait), swap: clean(swap), kv: clean(kv),
              genRate: clean(genRate), promptRate: clean(promptRate),
-             ttftT: clean(ttftT), tpotT: clean(tpotT) };
+             ttftT: clean(ttftT), tpotT: clean(tpotT),
+             ucmLoadBw: clean(ucmLoadBw), ucmDumpBw: clean(ucmDumpBw) };
   }, [samples]);
 
   // time-axis labels: grid index 0..4 -> sample timestamp (5s cadence => real clock)
@@ -328,8 +332,27 @@ export default function MonitorPage({ route }: { route: string }) {
                   <div className="kv"><span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: HBM, marginRight: 7 }} />HBM 命中 tokens</span><b>{Math.round(latest.ucm_hbm_tok ?? 0).toLocaleString()}</b></div>
                   <div className="kv"><span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: UCMC, marginRight: 7 }} />UCM 命中 tokens</span><b>{Math.round(latest.ucm_hit_tok ?? 0).toLocaleString()}</b></div>
                   <div className="kv"><span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "#5a5e66", marginRight: 7 }} />查询总量 tokens</span><b>{Math.round(latest.ucm_q_tok ?? 0).toLocaleString()}</b></div>
+                  {latest.posix_cap ? (
+                    <div className="kv"><span>Posix 存储占用</span>
+                      <b>{(latest.posix_used / latest.posix_cap * 100).toFixed(1)}%</b></div>
+                  ) : null}
                 </div>
               </div>
+              {samples.length > 1 && (
+                <div style={{ marginTop: 12 }}>
+                  <div className="chart-head"><b>UCM 存储带宽（GB/s）</b>
+                    <div className="legend">
+                      <span><i style={{ background: "#10a37f" }} />写入 dump</span>
+                      <span><i style={{ background: "#13c2c2" }} />读取 load</span>
+                    </div>
+                  </div>
+                  <LineChart yMax={Math.max(0.5, ...trend.ucmLoadBw, ...trend.ucmDumpBw)} height={130}
+                    fmt={(v) => v.toFixed(2)}
+                    series={[
+                      { data: trend.ucmDumpBw, color: "#10a37f", area: true },
+                      { data: trend.ucmLoadBw, color: "#13c2c2" }]} />
+                </div>
+              )}
             </div>
           </div>
 
