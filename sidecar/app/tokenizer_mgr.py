@@ -71,12 +71,15 @@ def verify(name_or_path: str) -> dict:
         w = _load(path)
         vocab = w._tok.get_vocab()
         ids = w._tok.encode("前缀缓存命中率校验")
-        if not ids:
+        # 10 个互不相同的汉字：合法编码必然 ≥2 个 token。返回 0 个（DeepSeek-V3/R1
+        # 系）或塌缩成 1 个（Step 系，实测 id=[0]）都是 transformers 5.17 的上游
+        # CJK bug——加载"成功"但编码已损坏，会静默毁掉数据集
+        if not ids or len(ids) < 2:
             return {
                 "ok": False, "path": path,
-                "error": "加载成功但中文编码返回 0 个 token（transformers 5.17 上游 bug，"
-                         "LlamaTokenizer 系如 DeepSeek 受影响；4.57.x 正常。"
-                         "建议换用其他 tokenizer 或锁定 4.57.x）",
+                "error": f"中文编码异常（10 字样本返回 {len(ids)} 个 token，"
+                         f"transformers 5.17 上游 bug：DeepSeek-V3/V3.1/V3.2/R1 与 Step 系受影响；"
+                         "4.57.x 正常。建议换用其他 tokenizer 或锁定 4.57.x）",
             }
         return {
             "ok": True,

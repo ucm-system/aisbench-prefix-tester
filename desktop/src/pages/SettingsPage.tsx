@@ -128,7 +128,7 @@ export default function SettingsPage() {
                 </div></div>
               <div className="subnote" style={{ marginTop: 8 }}>
                 此值为新 run 的<b>默认</b>采集间隔；单次 run 可在「新建测试 → 并发与调度」覆盖。
-                活动期（有请求在跑）自动提升到 1s，空闲回落到设置值。
+                阶段期（压测执行中）自动提升到 0.3s，空闲回落到设置值。
               </div>
             </div>
           )}

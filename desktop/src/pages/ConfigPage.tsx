@@ -641,7 +641,7 @@ export default function ConfigPage() {
                 </select></div>
               <div className="field" style={{ maxWidth: 150 }}><label>采集间隔（秒）</label>
                 <input className="inp mono" data-t="collection_interval" value={cfg.collection_interval}
-                  title="默认取设置页；活动期自动提升到 1s（U5.3）"
+                  title="默认取设置页；阶段期自动提升到 0.3s（自适应采样）"
                   onChange={(e) => set({ collection_interval: +e.target.value || 5 })} /></div>
             </div>
             <div className="subnote">

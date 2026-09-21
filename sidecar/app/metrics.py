@@ -211,10 +211,14 @@ class Collector:
 
     def __init__(self, pods: List[str], interval: float = 5.0,
                  on_sample: Optional[Callable[[dict], None]] = None,
-                 active_interval: float = 1.0):
+                 active_interval: float = 0.3):
         self.pods = pods
         self.interval = interval
-        self.active_interval = max(0.5, min(active_interval, interval))
+        # 复审残留缺口（R2.3b）：1s 阶段采样对亚秒级请求脉冲（实测 8 并发
+        # 0.4s 完成）仍会整体错过——脉冲可能出现在阶段中段（ais_bench 启动
+        # 延迟后），「起始突发」不可靠。阶段期一律 0.3s：10 分钟 soak 也仅
+        # ~2000 样本（存储/渲染均无压力），可稳定捕获 ≥0.3s 的脉冲。
+        self.active_interval = max(0.2, min(active_interval, interval))
         self.on_sample = on_sample
         self.latest: dict[tuple, dict[str, float]] = {}
         self.ucm_detected = False
@@ -223,6 +227,10 @@ class Collector:
         self._prev_totals: Dict[str, float] = {}
         self._task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
+        self._wake = asyncio.Event()  # phase transitions cut the idle sleep short
+        # the owning event loop (for thread-safe wake from the runner thread);
+        # named _aio_loop to avoid shadowing the _loop() poll method
+        self._aio_loop: Optional[asyncio.AbstractEventLoop] = None
         self._lock = asyncio.Lock()
 
     def _merged_totals(self, merged: dict[tuple, dict[str, float]]) -> Dict[str, float]:
@@ -273,13 +281,17 @@ class Collector:
         return any_ok
 
     def set_active(self, flag: bool) -> None:
-        """Phase-driven cadence override (R2.3).
+        """Phase-driven cadence override (R2.3/R2.3b).
 
         The runner flips this around every benchmark phase: pure gauge-based
-        detection is chicken-and-egg — a 5s idle-interval poll lands between
-        the 2-3s request bursts and never sees running>0, so the curve stays
-        empty. Phase-driven + detected both tighten the cadence."""
+        detection is chicken-and-egg — an idle-interval poll lands between
+        short request bursts and never sees running>0. Phase-driven + detected
+        both tighten the cadence; turning active also WAKES the sleeping loop
+        so the first fast sample lands at phase start, not one idle interval
+        later (thread-safe via call_soon_threadsafe)."""
         self._phase_active = bool(flag)
+        if flag and self._aio_loop and self._aio_loop.is_running():
+            self._aio_loop.call_soon_threadsafe(self._wake.set)
 
     def public_sample(self) -> dict:
         return {
@@ -292,19 +304,27 @@ class Collector:
 
     async def _loop(self) -> None:
         while not self._stop.is_set():
+            t0 = time.time()
             try:
                 await self._poll_once()
             except Exception:  # noqa: BLE001
                 logger.exception("poll cycle failed")
-            wait = self.active_interval if (self._phase_active or self.active) \
+            target = self.active_interval if (self._phase_active or self.active) \
                 else self.interval
+            # compensate the fetch duration so the EFFECTIVE sample spacing
+            # matches the target cadence (a remote /metrics fetch costs
+            # 100-200ms — uncompensated, 0.3s became ~0.5s in practice)
+            wait = max(0.05, target - (time.time() - t0))
+            # sleep, but a phase transition (set_active -> _wake) cuts it short
+            self._wake.clear()
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=wait)
+                await asyncio.wait_for(self._wake.wait(), timeout=wait)
             except asyncio.TimeoutError:
                 pass
 
     async def start(self) -> None:
-        self._task = asyncio.get_running_loop().create_task(self._loop())
+        self._aio_loop = asyncio.get_running_loop()
+        self._task = self._aio_loop.create_task(self._loop())
 
     async def stop(self) -> None:
         self._stop.set()

@@ -166,10 +166,18 @@ async def main():
                         spans.append((e["ts"], end))
                 phase_ts = sorted(ts for s in samples for ts in [s["ts"]]
                                   if any(a <= s["ts"] <= b for a, b in spans))
-                gaps = [b - a for a, b in zip(phase_ts, phase_ts[1:]) if 0.2 < b - a < 30]
+                gaps = [b - a for a, b in zip(phase_ts, phase_ts[1:]) if 0.05 < b - a < 30]
                 med = sorted(gaps)[len(gaps) // 2] if gaps else None
-                check("B2 阶段窗口采样间隔 ≈1s（R2.3 生效）",
-                      med is not None and med <= 2.0, f"median={med and round(med, 2)}s, n={len(gaps)}")
+                check("B2 阶段窗口采样间隔 ≈0.3s（R2.3b 生效）",
+                      med is not None and med <= 0.5, f"median={med and round(med, 2)}s, n={len(gaps)}")
+                # R2.3b：0.3s 阶段采样应捕获到真实并发脉冲（reviewer 微基准：
+                # 8 并发 0.4s 完成，1s 采样全错过；本 run full 阶段 c=8）
+                max_run = 0
+                for s in samples:
+                    for counters in (s.get("engines") or {}).values():
+                        max_run = max(max_run, counters.get("running", 0) or 0)
+                check("B4 真实 run 捕获到 running>0（亚秒脉冲）",
+                      max_run > 0, f"max running={max_run}")
                 idle_ts = sorted(s["ts"] for s in samples
                                  if not any(a <= s["ts"] <= b for a, b in spans))
                 idle_gaps = [b - a for a, b in zip(idle_ts, idle_ts[1:]) if 0.2 < b - a < 60]

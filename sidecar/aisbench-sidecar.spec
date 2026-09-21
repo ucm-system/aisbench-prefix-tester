@@ -17,18 +17,20 @@ if not os.path.isdir(_ab_configs):
 
 # bundled tokenizer assets (../assets/model/<name>/...) if present.
 # Curated per-directory bundling:
-#   - DeepSeek* EXCLUDED: its LlamaTokenizer loads fine but encodes Chinese to
-#     ZERO ids on the bundled transformers 5.17.x (upstream bug; 4.57.x works).
-#     Shipping it would silently corrupt datasets — see tokenizer_mgr.verify.
+#   - EXCLUDED (CJK encoding broken on the bundled transformers 5.17.x, loads
+#     fine but encodes Chinese to 0 or 1 tokens — silent dataset corruption):
+#     DeepSeek-V3/V3.1/V3.2/R1 (LlamaTokenizer family) and Step-3.5/3.7-Flash
+#     (collapses to token 0). DeepSeek-V4* verified SANE on 5.17 — included.
 #   - root smoke evidence (smoke_*.jsonl) stays out; manifest/README ship.
 _asset_model = os.path.join('..', 'assets', 'model')
+_BROKEN_5_17 = ('DeepSeek-V3', 'DeepSeek-R1', 'Step-')
 _asset_datas = []
 if os.path.isdir(_asset_model):
     for _name in sorted(os.listdir(_asset_model)):
         _sub = os.path.join(_asset_model, _name)
         if not os.path.isdir(_sub):
             continue
-        if _name.startswith('DeepSeek'):
+        if any(_name.startswith(_p) for _p in _BROKEN_5_17):
             continue
         _asset_datas.append((_sub, os.path.join('assets', 'model', _name)))
     for _rootfile in ('manifest.json', 'README.md'):

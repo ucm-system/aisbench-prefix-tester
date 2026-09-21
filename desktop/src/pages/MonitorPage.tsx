@@ -5,7 +5,7 @@ import { useToast } from "../App";
 import { ConfirmModal, InfoTip, StatusBadge, downloadTextFile, theoreticalHitRate, toCsv, useLocalState, fmtDur } from "../ui";
 
 type Ev = { type: string; ts: number; [k: string]: any };
-type Sample = { ts: number; engines: Record<string, Record<string, number>>; ucm?: boolean };
+type Sample = { ts: number; engines: Record<string, Record<string, number>>; ucm?: boolean; active?: boolean };
 
 const HBM = "var(--hbm)", EXT = "var(--ext)", UCMC = "var(--ucm)", MISS = "var(--miss)";
 const Q_RUN = "var(--run-q)", Q_WAIT = "var(--wait-q)", Q_SWAP = "var(--swap-q)";
@@ -144,7 +144,8 @@ export default function MonitorPage({ route }: { route: string }) {
               setLogs((prev) => [...prev.slice(-3000), toLog(ev.line as string)]);
             } else if (ev.type === "metrics") {
               setSamples((prev) => [...prev.slice(-6000),
-                { ts: ev.ts, engines: ev.sample?.engines ?? {}, ucm: ev.sample?.ucm_detected }]);
+                { ts: ev.ts, engines: ev.sample?.engines ?? {},
+                  ucm: ev.sample?.ucm_detected, active: ev.sample?.active }]);
               if (ev.sample?.ucm_detected != null) setUcm(ev.sample.ucm_detected);
             } else if (ev.type === "phase_rate") {
               setPhaseRate({ per_dp: ev.rate?.per_dp, agg: ev.rate?.aggregated, phase: ev.phase });
@@ -284,6 +285,18 @@ export default function MonitorPage({ route }: { route: string }) {
 
   const latest = flats[flats.length - 1]?.f ?? {};
   const agg = phaseRate?.agg ?? {};
+
+  /* 诚实降级（R2.3b 复审建议②）：有流量但所有采样时刻 gauge 均为 0 ——
+   * 请求脉冲短于采样间隔，曲线不代表峰值，明示而非画平 0 误导 */
+  const trafficMoved = flats.length > 1 && (() => {
+    const a = flats[0].f, b = flats[flats.length - 1].f;
+    return (b.prompt_tok ?? 0) > (a.prompt_tok ?? 0)
+      || (b.gen_tok ?? 0) > (a.gen_tok ?? 0)
+      || (b.success ?? 0) > (a.success ?? 0)
+      || (b.hbm_q ?? 0) > (a.hbm_q ?? 0);
+  })();
+  const maxQueue = Math.max(0, ...trend.run, ...trend.wait, ...trend.swap);
+  const gaugeMissed = trafficMoved && maxQueue === 0;
   const hasAgg = phaseRate != null && (agg.hbm_queries > 0 || agg.ext_queries > 0 || agg.hbm_hits > 0);
   const ttft = latest.ttft_cnt
     ? (latest.ttft_sum / latest.ttft_cnt) * 1000
@@ -514,7 +527,7 @@ export default function MonitorPage({ route }: { route: string }) {
           <div className="grid12">
             <div className="card chart-card g6">
               <div className="chart-head"><b>队列深度 & KV 利用率</b>
-                <span className="head-note">{flats.length > 1 && samples.some((s) => s.ucm || (s.engines && flatten(s.engines).running > 0)) ? "活动期 1s 采集" : "空闲期按设置间隔"}</span>
+                <span className="head-note">{samples.some((s) => s.active) ? "阶段期 0.3s 自适应采样" : "空闲期按设置间隔"}</span>
                 <div className="legend">
                   <span className="l-solid"><i style={{ background: Q_RUN }} />running</span>
                   <span className="l-dash"><i style={{ background: Q_WAIT }} />waiting</span>
@@ -525,11 +538,18 @@ export default function MonitorPage({ route }: { route: string }) {
                   [{ key: "run", label: "running" }, { key: "wait", label: "waiting" },
                    { key: "swap", label: "swapped" }, { key: "kv", label: "kv_usage%" }])}>⇓ CSV</button>
               </div>
+              {gaugeMissed && (
+                <div className="alert warn" style={{ marginBottom: 8 }}>
+                  <span>⚠</span>
+                  <div>本 run 有请求流量，但所有采样时刻队列深度均为 0 —— 请求脉冲可能短于采样间隔，曲线不代表峰值。如需捕获峰值，请在「新建测试 → 并发与调度」调低采集间隔。</div>
+                </div>
+              )}
               {endpointOffline ? (
                 <div className="chart-empty offline">指标端点不可达 — 请检查采集端点（/metrics）</div>
               ) : (
                 <TimeSeriesChart height={280} yMax={undefined}
-                  rightFmt={(v) => `${Math.round(v)}%`}
+                  rightFmt={(v) => (Math.abs(v) >= 10 || Number.isInteger(v)
+                    ? `${Math.round(v)}%` : `${Math.round(v * 10) / 10}%`)}
                   events={boundaryEvents} bands={roundBands} emptyHint="等待指标采样…"
                   ariaLabel="队列深度与KV利用率时序图"
                   series={[

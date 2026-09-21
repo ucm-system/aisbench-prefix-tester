@@ -238,3 +238,16 @@
 - **注册扫描修复**（config.py）：原候选条件只认 tokenizer.json/vocab.json，Kimi（tiktoken.model + tokenization_*.py）与 glm-4-9b-chat（tokenizer.model + 自定义代码）4 个目录不注册；`_looks_like_tokenizer_dir()` 扩展为四标记 + tiktoken/自定义布局，22/22 注册（含 D:\Models）。
 - 验证：22 tokenizer 注册、glm-4-9b-chat/Kimi×3/Qwen3.5-9B/GLM-5/MiniMax-M2.1 `verify ok=True` 且中文探针非空、DeepSeek×2 被拦截；test_features/test_api 全绿；tsc 0 错误。
 - **用户拍板（2026-09-21）：暂不重打安装包**——当前 392MB 产物保持不动（未含新 tokenizer）；新 tokenizer 在源码模式/开发环境立即可用。下次重打时 spec 已策展就绪：排除 DeepSeek×3（22.5MB）与 smoke 证据文件，预计安装包 392 + ~237MB ≈ **630MB**。
+
+### 第十三轮（复审 R2.3 残留缺口闭环 + tokenizer 二轮入库复核）
+
+**R2.3b 亚秒脉冲捕获**（复审微基准：8 并发 0.4s 完成，1s 采样全错过）：
+- `Collector` 阶段采样 **1s → 0.3s**（脉冲可能出现在阶段中段——ais_bench 启动延迟后，「起始突发」不可靠；10 分钟 soak 仅 ~2000 样本，抽稀/存储无压力）；`set_active(True)` 经 `call_soon_threadsafe` **即刻唤醒**休眠循环（相位切换不等一个空闲间隔）；轮询循环**补偿拉取耗时**（远端 /metrics 取数 100-200ms，不补偿时 0.3s 实际变 0.5s）。
+- 诚实降级（复审建议②）：监控队列图卡检测「有流量但所有采样时刻 gauge=0」→ 显示「请求脉冲短于采样间隔，曲线不代表峰值」警示条，不再无声画平 0；KV% 右轴刻度自适应小数（0-1% 值域不再显示重复「1%」）。
+- 修复过程顺带排掉一个自伤 bug：`self._loop` 属性遮蔽同名 `_loop()` 方法（test_api 立刻抓到）。
+- 验证（真实 8101）：阶段采样中位 **0.31s**（n=161）、**max running=8**（复审时为 0）、refix_verify 15/15、test_api 18/18、features 全绿。
+
+**Tokenizer 二轮入库独立复核**（子代理：67 条清单 → 74 目录/392 文件/1099.7MB，SHA256 全对，双版本冒烟）：
+- 亲测证实：**Step-3.5/3.7-Flash 在 5.17 下把 10 个汉字塌缩成 1 个 token（id=[0]）**——非空但错误，原有「非空探针」拦不住；**DeepSeek-V4 系正常（zh=5）**，损坏的只有 V3/V3.1/V3.2/R1。
+- `verify()` 探针加严：10 字互异汉字样本 <2 token 即报错（0 个与 1 个塌缩两种形态都拦）。现拦截矩阵：Step×2 + DeepSeek-V3/R1×4 全拦，V4 系/Kimi-K3/GLM-5.3/gemma-4/MiMo/Hy3/gpt-oss 全过，74/74 注册。
+- spec 黑名单精确化：`DeepSeek-V3* / DeepSeek-R1 / Step-*`（V4 系保留入库）；未来全量打包估算 ≈ 392 + 1032 ≈ **1.42GB**。assets/ 不入库（.gitignore）。
