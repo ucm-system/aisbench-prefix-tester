@@ -53,7 +53,7 @@ cd ../desktop && npm install && npm run build
 npx electron-builder --win --publish never                          # 注意先关掉旧实例，避免输出文件被锁
 ```
 
-- **安装版** `AISBenchPrefixTester-Setup-<版本>.exe`：双击自动安装到当前用户目录，开始菜单启动，**秒开**（无便携版每次解压的等待）——日常使用推荐
+- **安装版** `AISBenchPrefixTester-Setup-<版本>.exe`：标准 Windows 安装向导（中文界面，**可选择安装目录**、桌面/开始菜单快捷方式、完成后运行、控制面板可卸载且保留数据），安装后**秒开**——日常使用推荐
 - **便携版** `AISBenchPrefixTester-Portable.exe`：单文件免安装，适合分发/U 盘场景；每次启动需解压（约 30 秒）
 - 两者数据目录通用（`%USERPROFILE%\AISBenchPrefixTester`），历史记录无缝衔接；均自包含（Python + ais_bench + 全部依赖内置），目标机器无需任何环境
 

@@ -216,3 +216,13 @@
 - **全局**：favicon+侧栏 logo（层叠块+命中闪电 SVG）；术语中文化（前缀缓存查询构成等）+口径 InfoTip；焦点环 focus-visible；图表 aria-label/<title>；图例线型区分（实/虚/点）；断连黄条；监控路由顶栏面包屑「← 运行记录」+侧栏高亮归并；活动 run 顶栏提示保留到查看过为止。
 - **验收**：`npx tsc --noEmit` 0 错误；`npm run build` 成功；test_features/test_api 全绿；新增 `tools/tests/test_ux_flow.py`（mock 8091 源码模式全流程 22/22：发起→WS 事件→回放 events/metrics→软删/恢复/清除→对比导出）；新增 `tools/tests/ux_dom_check.py`（CDP headless Edge 40/40：6 页×2 视口无横向溢出 + 28 项结构断言）与 `tools/tests/ux_screens.py`（1440/1024 截图 12 张 → docs/screenshots/ux2-*.png 供人工复核；本会话模型无图片输入，几何/结构断言程序化替代目检）。
 - **遗留**：打包产物重建（portable/NSIS）待下轮与发布流程一起做；日志去重（同一行重复刷屏）未在本轮范围。
+
+### 第十一轮（安装器标准化 + v0.2.0 产物重建）
+
+用户反馈：旧 `Setup-0.1.0.exe` 为 oneClick 一键安装（不选路径、无向导）——「太流氓了」。整改为标准 Windows 辅助式安装：
+
+- **NSIS 配置**（desktop/package.json）：`oneClick: false` + `allowToChangeInstallationDirectory: true` + `allowElevation: true`（选 Program Files 时 UAC）+ `installerLanguages: ["zh_CN"]`（中文向导）+ 桌面/开始菜单快捷方式（快捷方式名「AISBench 前缀复用测试器」）+ 完成后运行 + ARP 卸载项显示中文名；卸载保留数据（`deleteAppDataOnUninstall: false`）。
+- **应用图标**：新增 `tools/make_icon.py`（PIL 绘制与前端 AppIcon 同构的层叠块+闪电）生成 `desktop/build/icon.ico`（16/32/48/64/256）；`win.icon` 指向它，main.cjs BrowserWindow 带图标，回退启动屏换新品牌（不再是「PC」字样）。
+- **版本对齐 0.2.0**：package.json / sidecar version.py / 侧栏与「关于」页三处一致。
+- **重建与验收**（D:\pt-release）：battery 21/21（新 exe）；Setup-0.2.0 静默安装到自定义目录 ✓（exit 0、uninstaller/resources 落位、ARP 显示「AISBench 前缀复用测试器 v0.2.0」）、安装版启动 3s sidecar 就绪（frozen v0.2.0）✓、静默卸载目录与 ARP 干净且数据保留 ✓；portable 7/7 ✓；陈旧 Setup-0.1.0.exe 已删除避免误用。
+- **坑**：重建前 win-unpacked 里开着的应用实例会锁输出目录（EBUSY rmdir）——打包前先关旧实例；应用有单实例锁，安装版与 win-unpacked 同时启动时后来者静默退出。

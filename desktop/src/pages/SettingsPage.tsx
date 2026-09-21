@@ -231,7 +231,7 @@ export default function SettingsPage() {
             <div className="card">
               <h3>关于</h3>
               <div className="kv"><span>应用</span><b>AISBench 前缀复用测试器</b></div>
-              <div className="kv"><span>版本</span><b>v0.1.0（UX v0.2 重设计）</b></div>
+              <div className="kv"><span>版本</span><b>v0.2.0（UX v0.2 重设计）</b></div>
               <div className="kv"><span>数据目录</span>
                 <b className="mono" style={{ fontSize: 11 }}>{home || "…"}（app.db / outputs / datasets）</b></div>
               <div className="kv" style={{ borderBottom: "none" }}>

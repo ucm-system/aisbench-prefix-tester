@@ -144,12 +144,15 @@ async function ensureSidecarInfo() {
 }
 
 function createWindow() {
+  // 应用图标（安装后由 exe 内嵌；开发/回退场景显式指定）
+  const iconPath = path.join(__dirname, "..", "build", "icon.ico");
   win = new BrowserWindow({
     width: 1560,
     height: 980,
     minWidth: 1100,
-    backgroundColor: "#050506",
+    backgroundColor: "#0f1115",
     autoHideMenuBar: true,
+    ...(fs.existsSync(iconPath) ? { icon: iconPath } : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -169,12 +172,15 @@ function createWindow() {
       win.loadFile(uiFile);
     } else {
       const splash = "data:text/html;charset=utf-8," + encodeURIComponent(
-        '<html><body style="margin:0;background:#050506;display:flex;align-items:center;justify-content:center;height:100vh;font-family:Segoe UI,PingFang SC,sans-serif">' +
-        '<div style="text-align:center"><div style="width:44px;height:44px;margin:0 auto 14px;border-radius:12px;' +
-        'background:linear-gradient(135deg,#2b7fff,#13c2c2);display:flex;align-items:center;justify-content:center;' +
-        'color:#fff;font-weight:800;font-size:18px">PC</div>' +
-        '<div style="color:#e9eaec;font-size:14px">AISBench 前缀复用测试器</div>' +
-        '<div style="color:#6d7078;font-size:12px;margin-top:6px">正在启动服务…</div></div></body></html>');
+        '<html><body style="margin:0;background:#0f1115;display:flex;align-items:center;justify-content:center;height:100vh;font-family:Segoe UI,PingFang SC,sans-serif">' +
+        '<div style="text-align:center">' +
+        '<svg width="52" height="52" viewBox="0 0 32 32" style="margin:0 auto 14px;display:block">' +
+        '<rect width="32" height="32" rx="7" fill="#2f6ff0"/>' +
+        '<rect x="6" y="19" width="20" height="4" rx="1.5" fill="#fff" opacity=".55"/>' +
+        '<rect x="6" y="13" width="20" height="4" rx="1.5" fill="#fff" opacity=".8"/>' +
+        '<path d="M13 4l-4 8h4l-2 6 7-9h-4l3-5z" fill="#fbbf24"/></svg>' +
+        '<div style="color:#e6e9f0;font-size:14px">AISBench 前缀复用测试器</div>' +
+        '<div style="color:#9aa3b2;font-size:12px;margin-top:6px">正在启动服务…</div></div></body></html>');
       win.loadURL(splash);
       // fallback (ui assets missing): sidecar serves the bundled UI same-origin
       ensureSidecarInfo().then((info) => {
