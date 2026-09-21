@@ -108,11 +108,11 @@ export default function MonitorPage({ route }: { route: string }) {
     }
   }, [logs]);
 
-  // sliding-window hit rates from consecutive samples
+  // sliding-window rates from consecutive samples (5s collector cadence)
   const trend = useMemo(() => {
     const hbm: number[] = [], ext: number[] = [], comp: number[] = [];
-    const run: number[] = [], wait: number[] = [], kv: number[] = [];
-    const genRate: number[] = [], promptRate: number[] = [], ttftT: number[] = [];
+    const run: number[] = [], wait: number[] = [], kv: number[] = [], swap: number[] = [];
+    const genRate: number[] = [], promptRate: number[] = [], ttftT: number[] = [], tpotT: number[] = [];
     let prev = samples[0]?.flat;
     let prevTs = samples[0]?.ts;
     for (const s of samples) {
@@ -127,18 +127,29 @@ export default function MonitorPage({ route }: { route: string }) {
       comp.push(hr != null && er != null ? (er * (1 - hr) + hr) * 100 : NaN);
       run.push(f.running ?? 0);
       wait.push(f.waiting ?? 0);
+      swap.push(f.swapped ?? 0);
       kv.push((f.kv_usage ?? 0) * 100);
       genRate.push(prev ? Math.max(0, (f.gen_tok - prev.gen_tok) / dt) : 0);
       promptRate.push(prev ? Math.max(0, (f.prompt_tok - prev.prompt_tok) / dt) : 0);
       const dc = prev ? f.ttft_cnt - prev.ttft_cnt : 0;
       ttftT.push(dc > 0 ? ((f.ttft_sum - prev.ttft_sum) / dc) * 1000 : NaN);
+      const di = prev ? f.itl_cnt - prev.itl_cnt : 0;
+      tpotT.push(di > 0 ? ((f.itl_sum - prev.itl_sum) / di) * 1000 : NaN);
       prev = f; prevTs = s.ts;
     }
     const clean = (a: number[]) => a.map((v) => (Number.isFinite(v) ? v : 0));
     return { hbm: clean(hbm), ext: clean(ext), comp: clean(comp),
-             run: clean(run), wait: clean(wait), kv: clean(kv),
-             genRate: clean(genRate), promptRate: clean(promptRate), ttftT: clean(ttftT) };
+             run: clean(run), wait: clean(wait), swap: clean(swap), kv: clean(kv),
+             genRate: clean(genRate), promptRate: clean(promptRate),
+             ttftT: clean(ttftT), tpotT: clean(tpotT) };
   }, [samples]);
+
+  // time-axis labels: grid index 0..4 -> sample timestamp (5s cadence => real clock)
+  const timeX = (i: number, n: number) => {
+    const di = n > 1 ? Math.round((i * (samples.length - 1)) / 4) : 0;
+    const ts = samples[di]?.ts;
+    return ts ? new Date(ts * 1000).toLocaleTimeString("zh-CN", { hour12: false }) : "";
+  };
 
   const latest = samples[samples.length - 1]?.flat ?? {};
   const genThr = samples.length > 1 ? genRateOf(samples) : 0;
@@ -216,8 +227,6 @@ export default function MonitorPage({ route }: { route: string }) {
             {card(<span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: UCMC, marginRight: 6 }} />综合命中率</span>,
               `${(((agg.ext_hit_rate ?? 0) * (1 - (agg.hbm_hit_rate ?? 0)) + (agg.hbm_hit_rate ?? 0)) * 100).toFixed(1)}%`, "ext×(1−hbm)+hbm", UCMC,
               ((agg.ext_hit_rate ?? 0) * (1 - (agg.hbm_hit_rate ?? 0)) + (agg.hbm_hit_rate ?? 0)) * 100)}
-            {card("当前并发 running", `${Math.round(latest.running ?? 0)}`, `waiting ${Math.round(latest.waiting ?? 0)} · swapped ${Math.round(latest.swapped ?? 0)}`)}
-            {card("等待队列", `${Math.round(latest.waiting ?? 0)}`, "scheduler queue")}
             {card("KV Cache 利用率", `${((latest.kv_usage ?? 0) * 100).toFixed(0)}%`, "GPU KV 占用", "#e2a336", (latest.kv_usage ?? 0) * 100)}
             {card("avg TTFT", `${ttft.toFixed(0)}ms`, `P90 前缀缓存探测`)}
             {card("输出吞吐", `${genThr.toFixed(0)}`, "tok/s（滑动窗）")}
@@ -225,24 +234,37 @@ export default function MonitorPage({ route }: { route: string }) {
 
           <div className="monitor-grid">
             <div className="card">
-              <div className="chart-head"><b>请求状态 / KV 占用</b>
+              <div className="chart-head"><b>队列深度（running / waiting / swapped）</b>
+                <span className="tag gray" style={{ fontSize: 10 }}>5s 实时采集</span>
                 <div className="legend">
-                  <span><i style={{ background: "#8ab4ff" }} />running</span>
-                  <span><i style={{ background: "#f0be63" }} />waiting</span>
-                  <span className="dashed" style={{ color: "#13c2c2" }}><i />KV %</span>
+                  <span><i style={{ background: "#73BF69" }} />running</span>
+                  <span><i style={{ background: "#F2CC0C" }} />waiting</span>
+                  <span><i style={{ background: "#E53935" }} />swapped</span>
                 </div>
               </div>
               {samples.length > 1
-                ? <LineChart yMax={Math.max(10, ...trend.run, ...trend.wait, ...trend.kv)} height={170}
+                ? <LineChart yMax={Math.max(5, ...trend.run, ...trend.wait, ...trend.swap)} height={180}
                     fmt={(v) => String(Math.round(v))}
                     series={[
-                      { data: trend.run, color: "#8ab4ff" },
-                      { data: trend.wait, color: "#f0be63" },
-                      { data: trend.kv, color: "#13c2c2", dash: true }]} />
+                      { data: trend.run, color: "#73BF69", area: true },
+                      { data: trend.wait, color: "#F2CC0C" },
+                      { data: trend.swap, color: "#E53935" }]} />
                 : <div className="subnote">等待指标采样…</div>}
             </div>
             <div className="card">
-              <div className="chart-head"><b>吞吐 (tok/s，滑动窗)</b>
+              <div className="chart-head"><b>KV Cache 利用率（%）</b>
+                <div className="legend"><span><i style={{ background: "#e2a336" }} />kv_usage</span></div>
+              </div>
+              {samples.length > 1
+                ? <LineChart yMax={100} height={180} fmt={(v) => `${Math.round(v)}%`}
+                    series={[{ data: trend.kv, color: "#e2a336", area: true }]} />
+                : <div className="subnote">等待指标采样…</div>}
+            </div>
+          </div>
+
+          <div className="monitor-grid">
+            <div className="card">
+              <div className="chart-head"><b>吞吐（tok/s，滑动窗）</b>
                 <div className="legend">
                   <span><i style={{ background: "#10a37f" }} />输出</span>
                   <span><i style={{ background: "#9254de" }} />输入</span>
@@ -251,9 +273,26 @@ export default function MonitorPage({ route }: { route: string }) {
               {samples.length > 1
                 ? <LineChart yMax={Math.max(10, ...trend.genRate, ...trend.promptRate)} height={170}
                     fmt={(v) => String(Math.round(v))}
+                    xLabel={timeX}
                     series={[
                       { data: trend.genRate, color: "#10a37f", area: true },
                       { data: trend.promptRate, color: "#9254de" }]} />
+                : <div className="subnote">等待指标采样…</div>}
+            </div>
+            <div className="card">
+              <div className="chart-head"><b>延迟趋势（ms，滑动窗均值）</b>
+                <div className="legend">
+                  <span><i style={{ background: "#e2a336" }} />TTFT avg</span>
+                  <span><i style={{ background: "#9254de" }} />TPOT avg</span>
+                </div>
+              </div>
+              {samples.length > 1
+                ? <LineChart yMax={Math.max(10, ...trend.ttftT, ...trend.tpotT)} height={170}
+                    fmt={(v) => String(Math.round(v))}
+                    xLabel={timeX}
+                    series={[
+                      { data: trend.ttftT, color: "#e2a336" },
+                      { data: trend.tpotT, color: "#9254de" }]} />
                 : <div className="subnote">等待指标采样…</div>}
             </div>
           </div>
@@ -272,7 +311,7 @@ export default function MonitorPage({ route }: { route: string }) {
                     { data: trend.hbm, color: HBM, area: true },
                     { data: trend.ext, color: EXT },
                     { data: trend.comp, color: UCMC, dash: true }]} yMax={100} height={200}
-                    fmt={(v) => `${v}%`} xLabel={(i, n) => `${Math.round((i * n))}`} />
+                    fmt={(v) => `${v}%`} xLabel={timeX} />
                 : <div className="subnote">等待指标采样…</div>}
             </div>
             <div className="card">

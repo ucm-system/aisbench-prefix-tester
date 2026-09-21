@@ -847,7 +847,10 @@ def main() -> None:
         {"port": port, "token": _state["token"]}), encoding="utf-8")
     logger.info("listening on %s:%s (port file %s)", args.host, port, args.port_file)
 
-    server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
+    # keep-alive 65s: UI/CLI poll every 5s over reused connections — uvicorn's
+    # 5s default races the poll interval and intermittently resets them
+    server = uvicorn.Server(uvicorn.Config(app, log_level="warning",
+                                           timeout_keep_alive=65))
     server.run(sockets=[sock])
 
 
