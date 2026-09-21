@@ -20,7 +20,13 @@ export const connStatus = { connected: false, lastError: "" };
 
 export async function initConnection(): Promise<Conn | null> {
   if (window.sidecarBridge) {
-    conn = await window.sidecarBridge.getInfo();
+    // Electron: the window opens immediately while the self-contained sidecar
+    // keeps loading — poll the non-blocking IPC until the environment is ready
+    for (;;) {
+      conn = await window.sidecarBridge.getInfo();
+      if (conn) break;
+      await new Promise((r) => setTimeout(r, 1200));
+    }
   } else {
     // container deployment: same origin serves both UI and API
     try {

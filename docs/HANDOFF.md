@@ -173,6 +173,12 @@
 - **便携版端到端测试 `tools/tests/test_portable.py`**（7/7 PASS）：启动便携 exe → 等待 `%USERPROFILE%\AISBenchPrefixTester\sidecar.port` → 验证 runtime=frozen、自包含声明、内置 AISBench/tokenizer 资产 → 经便携内嵌 sidecar 真实跑 mock 压测（内置 ais_bench 子进程全流程）completed。
 - 结论：`D:\pt-release\AISBenchPrefixTester-Portable.exe` 即当前可分发版本（自包含，目标机器无需任何 Python 环境）。
 
+### 第八轮（秒开页面 + 便携版 10 轮实测）
+
+- **UI-first 启动**：main.cjs 打包分支改为立即 `loadFile(resources/ui/index.html)`（vite base 已是 `./`，file:// 可加载），不再等 sidecar；`sidecar-info` IPC 改非阻塞（未就绪返回 null）；api.ts 在 Electron 模式轮询直到环境就绪；App 渲染「正在启动运行环境…」启动屏。窗口秒开，环境后台预热，就绪后自动进入。
+- **便携版 10 轮实测**（经便携版自身 sidecar，数据落 `%USERPROFILE%\AISBenchPrefixTester`）：10 轮全部 completed、20 个阶段行、每轮 HBM 94.5%、0 传输错误、记录出现在便携版历史（此前"看不到记录"是因驱动用了隔离的临时 home）。
+- 启动耗时构成：便携目标每次启动需解压 345MB→1GB（约 20-40s，electron-builder portable 机制）+ sidecar 预热（splash 覆盖）；**日常高频使用建议直接运行 `D:\pt-release\win-unpacked\AISBenchPrefixTester.exe`（免解压、秒级启动）**，或改用 NSIS 安装器一次性安装。
+
 **遗留 backlog**（按优先级，均已有修复方案在审查报告中）：
 
 ### 第二轮（导航重构，同日）

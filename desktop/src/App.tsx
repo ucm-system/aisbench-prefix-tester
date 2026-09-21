@@ -148,6 +148,14 @@ export default function App() {
               </button>
             </div>
           )}
+          {!ready && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "70vh", gap: 16 }}>
+              <div style={{ width: 56, height: 56, borderRadius: 16, background: "linear-gradient(135deg,#2b7fff,#13c2c2)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 800, fontSize: 22 }}>PC</div>
+              <div style={{ fontSize: 15, fontWeight: 600 }}>正在启动运行环境…</div>
+              <div style={{ color: "var(--muted)", fontSize: 12 }}>自包含模式：预热内置 Python / ais_bench 后自动进入，无需任何操作</div>
+              <div className="progress" style={{ width: 280 }}><i style={{ width: "45%" }} /></div>
+            </div>
+          )}
           {ready && (
             <>
               {pageKey === "config" && <ConfigPage />}

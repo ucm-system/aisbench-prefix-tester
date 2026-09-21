@@ -159,22 +159,32 @@ function createWindow() {
   if (process.env.ELECTRON_START_URL) {
     win.loadURL(process.env.ELECTRON_START_URL);
   } else {
-    const splash = "data:text/html;charset=utf-8," + encodeURIComponent(
-      '<html><body style="margin:0;background:#050506;display:flex;align-items:center;justify-content:center;height:100vh;font-family:Segoe UI,PingFang SC,sans-serif">' +
-      '<div style="text-align:center"><div style="width:44px;height:44px;margin:0 auto 14px;border-radius:12px;' +
-      'background:linear-gradient(135deg,#2b7fff,#13c2c2);display:flex;align-items:center;justify-content:center;' +
-      'color:#fff;font-weight:800;font-size:18px">PC</div>' +
-      '<div style="color:#e9eaec;font-size:14px">AISBench 前缀复用测试器</div>' +
-      '<div style="color:#6d7078;font-size:12px;margin-top:6px">正在启动服务…</div></div></body></html>');
-    win.loadURL(splash);
-    // packaged: the sidecar serves the bundled UI — wait for it then load same-origin
-    ensureSidecarInfo().then((info) => {
-      if (info && info.port) {
-        win.loadURL(`http://127.0.0.1:${info.port}/`);
-      } else {
-        win.loadURL("data:text/html,<h2 style='font-family:sans-serif;color:#e9eaec;background:#050506;padding:24px'>Sidecar 启动失败 — 请重启应用</h2>");
-      }
-    });
+    const uiFile = process.resourcesPath
+      ? path.join(process.resourcesPath, "ui", "index.html")
+      : path.join(__dirname, "..", "resources", "ui", "index.html");
+    if (fs.existsSync(uiFile)) {
+      // UI first: the window opens immediately while the self-contained
+      // sidecar keeps loading in the background (renderer polls sidecar-info
+      // and shows a startup splash until the environment is ready).
+      win.loadFile(uiFile);
+    } else {
+      const splash = "data:text/html;charset=utf-8," + encodeURIComponent(
+        '<html><body style="margin:0;background:#050506;display:flex;align-items:center;justify-content:center;height:100vh;font-family:Segoe UI,PingFang SC,sans-serif">' +
+        '<div style="text-align:center"><div style="width:44px;height:44px;margin:0 auto 14px;border-radius:12px;' +
+        'background:linear-gradient(135deg,#2b7fff,#13c2c2);display:flex;align-items:center;justify-content:center;' +
+        'color:#fff;font-weight:800;font-size:18px">PC</div>' +
+        '<div style="color:#e9eaec;font-size:14px">AISBench 前缀复用测试器</div>' +
+        '<div style="color:#6d7078;font-size:12px;margin-top:6px">正在启动服务…</div></div></body></html>');
+      win.loadURL(splash);
+      // fallback (ui assets missing): sidecar serves the bundled UI same-origin
+      ensureSidecarInfo().then((info) => {
+        if (info && info.port) {
+          win.loadURL(`http://127.0.0.1:${info.port}/`);
+        } else {
+          win.loadURL("data:text/html,<h2 style='font-family:sans-serif;color:#e9eaec;background:#050506;padding:24px'>Sidecar 启动失败 — 请重启应用</h2>");
+        }
+      });
+    }
   }
   win.on("closed", () => (win = null));
 }
@@ -197,7 +207,17 @@ app.on("window-all-closed", () => {
   app.quit();
 });
 
-ipcMain.handle("sidecar-info", async () => ensureSidecarInfo());
+ipcMain.handle("sidecar-info", async () => {
+  // non-blocking: null while the environment is still loading — the renderer
+  // polls this and shows its startup splash until the sidecar is ready
+  if (sidecarInfo) return sidecarInfo;
+  if (fs.existsSync(portFile())) {
+    try {
+      sidecarInfo = JSON.parse(fs.readFileSync(portFile(), "utf-8"));
+    } catch {}
+  }
+  return sidecarInfo;
+});
 ipcMain.handle("sidecar-restart", async () => {
   startSidecar();
   sidecarInfo = await waitForPortFile();
