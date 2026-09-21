@@ -35,6 +35,7 @@ export default function MonitorPage({ route }: { route: string }) {
   useEffect(() => {
     if (!runId) return;
     let alive = true;
+    let closed = false;
     setEvents([]); setLogs([]); setSamples([]); setPhaseRate(null);
     setDetail(null); setUcm(null); setPhase(""); setRound(0);
     setStatus("connecting");
@@ -48,6 +49,8 @@ export default function MonitorPage({ route }: { route: string }) {
       setStatus(d.status);
       setTotalRounds((d.config?.rounds ?? [1]).length || 1);
       const rounds: RoundRow[] = d.rounds ?? [];
+      const lastRow = rounds[rounds.length - 1];
+      if (lastRow) setRound(lastRow.round_index);
       const lastFull = [...rounds].reverse().find((r) => r.phase === "full");
       if (lastFull) setPhaseRate({ per_dp: lastFull.hit_rate?.per_dp, agg: lastFull.hit_rate?.aggregated, phase: "full" });
       // backfill the log tail so mid-run monitoring shows history too
@@ -72,31 +75,57 @@ export default function MonitorPage({ route }: { route: string }) {
         if (flatSamples.length && flatSamples[0].flat._ucm_seen) setUcm(true);
       }).catch(() => {});
       if (d.status === "running" || d.status === "pending") {
-        const ws = wsRun(runId);
-        wsRef.current = ws;
-        ws.onmessage = (m) => {
-          if (!alive) return;
-          const ev: Ev = JSON.parse(m.data);
-          setEvents((prev) => [...prev.slice(-4000), ev]);
-          if (ev.type === "status") {
-            setStatus(ev.status); setPhase(ev.phase ?? ""); setRound(ev.round ?? 0);
-            setTotalRounds(ev.total_rounds ?? 1);
-          } else if (ev.type === "log") {
-            setLogs((prev) => [...prev.slice(-3000), toLog(ev.line as string)]);
-          } else if (ev.type === "metrics") {
-            setSamples((prev) => [...prev.slice(-600), { ts: ev.ts, flat: ev.sample.flat }]);
-            if (ev.sample?.ucm_detected != null) setUcm(ev.sample.ucm_detected);
-          } else if (ev.type === "phase_rate") {
-            setPhaseRate({ per_dp: ev.rate?.per_dp, agg: ev.rate?.aggregated, phase: ev.phase });
-          } else if (ev.type === "warning") {
-            toast(ev.message);
-          }
+        // WS with auto-reconnect: the sidecar is busy spawning subprocesses
+        // during runs, so the socket can drop — resync state on every reconnect
+        let closed = false;
+        const connectWs = () => {
+          if (!alive || closed) return;
+          const ws = wsRun(runId);
+          wsRef.current = ws;
+          ws.onmessage = (m) => {
+            if (!alive) return;
+            const ev: Ev = JSON.parse(m.data);
+            setEvents((prev) => [...prev.slice(-4000), ev]);
+            if (ev.type === "status") {
+              setStatus(ev.status); setPhase(ev.phase ?? ""); setRound(ev.round ?? 0);
+              setTotalRounds(ev.total_rounds ?? 1);
+            } else if (ev.type === "log") {
+              setLogs((prev) => [...prev.slice(-3000), toLog(ev.line as string)]);
+            } else if (ev.type === "metrics") {
+              setSamples((prev) => [...prev.slice(-600), { ts: ev.ts, flat: ev.sample.flat }]);
+              if (ev.sample?.ucm_detected != null) setUcm(ev.sample.ucm_detected);
+            } else if (ev.type === "phase_rate") {
+              setPhaseRate({ per_dp: ev.rate?.per_dp, agg: ev.rate?.aggregated, phase: ev.phase });
+            } else if (ev.type === "warning") {
+              toast(ev.message);
+            }
+          };
+          ws.onclose = () => {
+            if (!alive || closed) return;
+            setStatus((s) => (s === "running" || s === "pending" ? "reconnecting" : s));
+            window.setTimeout(async () => {
+              if (!alive || closed) return;
+              try {
+                const d2 = await api.get<any>(`/api/runs/${runId}`);
+                if (!alive) return;
+                if (d2.status !== "running" && d2.status !== "pending") {
+                  // run finished while disconnected: adopt terminal state
+                  setStatus(d2.status);
+                  return;
+                }
+                connectWs();
+              } catch {
+                window.setTimeout(connectWs, 3000);
+              }
+            }, 3000);
+          };
         };
-        ws.onclose = () => { if (alive && (d.status === "running")) setStatus("reconnecting"); };
+        connectWs();
       }
     }).catch(() => { if (alive) setStatus("not_found"); });
     return () => {
       alive = false;
+      closed = true;
       wsRef.current?.close();
       wsRef.current = null;
     };
@@ -268,6 +297,7 @@ export default function MonitorPage({ route }: { route: string }) {
               {samples.length > 1
                 ? <LineChart yMax={Math.max(5, ...trend.run, ...trend.wait, ...trend.swap)} height={180}
                     fmt={(v) => String(Math.round(v))}
+                    xLabel={timeX}
                     series={[
                       { data: trend.run, color: "#73BF69", area: true },
                       { data: trend.wait, color: "#F2CC0C" },
@@ -280,6 +310,7 @@ export default function MonitorPage({ route }: { route: string }) {
               </div>
               {samples.length > 1
                 ? <LineChart yMax={100} height={180} fmt={(v) => `${Math.round(v)}%`}
+                    xLabel={timeX}
                     series={[{ data: trend.kv, color: "#e2a336", area: true }]} />
                 : <div className="subnote">等待指标采样…</div>}
             </div>
