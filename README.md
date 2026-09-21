@@ -18,7 +18,7 @@ UCM/vLLM 命中率实时采集、多轮对比报告、SLA 最大并发自动搜�
 - **SLA 自动调优**：并发 ×2 阶梯 + 二分细化；**预检快失败**（并发=1 即不满足时拒绝运行并附实测证据）、矛盾/非法阈值拒绝、探针日志实时跟随、历史记录与状态恢复
 - **对比与报告**：多 run 对比（自动排除预埋/练习轮，方向感知增量，导出与页面口径一致）→ xlsx（5 Sheet）与离线 HTML 报告
 - **运行管理**：类型筛选（手动/SLA 探针）、单条与批量删除、勾选直通对比、跨重启持久化
-- **部署形态**：Windows 免安装便携 exe ／ 服务器 Docker 容器（UI + API 同容器，浏览器直连）
+- **部署形态**：Windows 安装版（秒开）/ 便携 exe（单文件免安装）/ 服务器 Docker 容器（UI + API 同容器），三种形态数据目录互通、均自包含
 
 ## 截图
 
@@ -42,19 +42,20 @@ Sidecar 仅绑定 `127.0.0.1`，Bearer token + 端口文件发现；目标服务
 
 ## 快速开始
 
-### Windows 便携 exe（推荐，自包含）
+### Windows 安装版 / 便携 exe（自包含，推荐）
 
-直接分发/运行 `D:\pt-release\AISBenchPrefixTester-Portable.exe`（或自行构建，见下）。
-双击启动 → 侧栏「新建测试」填目标服务与 tokenizer → 开始测试即自动进入运行监控。
-
-自行构建便携版（约 10 分钟，产物 `D:\pt-release\AISBenchPrefixTester-Portable.exe`）：
+构建（约 15 分钟，同时产出安装版与便携版到 `D:\pt-release`）：
 
 ```bash
 pip install pyinstaller
 cd sidecar && py -3.11 -m PyInstaller aisbench-sidecar.spec        # 自包含 sidecar（内嵌 ais_bench/tokenizer 资产）
 cd ../desktop && npm install && npm run build
-npx electron-builder --win portable --publish never                # 便携版（注意先关掉旧实例，避免输出文件被锁）
+npx electron-builder --win --publish never                          # 注意先关掉旧实例，避免输出文件被锁
 ```
+
+- **安装版** `AISBenchPrefixTester-Setup-<版本>.exe`：双击自动安装到当前用户目录，开始菜单启动，**秒开**（无便携版每次解压的等待）——日常使用推荐
+- **便携版** `AISBenchPrefixTester-Portable.exe`：单文件免安装，适合分发/U 盘场景；每次启动需解压（约 30 秒）
+- 两者数据目录通用（`%USERPROFILE%\AISBenchPrefixTester`），历史记录无缝衔接；均自包含（Python + ais_bench + 全部依赖内置），目标机器无需任何环境
 
 ### 服务器容器（UI + API 同容器）
 

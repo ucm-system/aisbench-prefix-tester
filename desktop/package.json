@@ -48,12 +48,24 @@
     "win": {
       "target": [
         {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
           "target": "portable",
           "arch": [
             "x64"
           ]
         }
       ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "AISBenchPrefixTester-Setup-${version}.exe"
     },
     "portable": {
       "artifactName": "AISBenchPrefixTester-Portable.exe"
