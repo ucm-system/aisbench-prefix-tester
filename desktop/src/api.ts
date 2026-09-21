@@ -96,6 +96,11 @@ export const api = {
   put: <T>(p: string, body: unknown) => req<T>(p, "PUT", body),
   patch: <T>(p: string, body: unknown) => req<T>(p, "PATCH", body),
   del: <T>(p: string) => req<T>(p, "DELETE"),
+  // soft delete (UI trash with undo window) + restore + hard purge
+  trashRuns: (ids: string[]) => req<{ ok: boolean; deleted: string[] }>("/api/runs/trash", "POST", { run_ids: ids }),
+  restoreRuns: (ids: string[]) => req<{ ok: boolean; restored: string[] }>("/api/runs/restore", "POST", { run_ids: ids }),
+  purgeRuns: (ids: string[]) => req<{ ok: boolean; purged: string[] }>("/api/runs/purge", "POST", { run_ids: ids }),
+  getRunEvents: (runId: string) => req<{ events: { type: string; ts: number; [k: string]: unknown }[] }>(`/api/runs/${runId}/events`),
 };
 
 /** Reactive connection state: false while the self-contained environment is
@@ -125,6 +130,16 @@ export function downloadLink(path: string): string {
   return `${baseUrl()}${path}${sep}token=${conn?.token}`;
 }
 
+/** 本地埋点（REDESIGN §9）：fire-and-forget，失败静默，绝不打扰主流程 */
+export function track(event: string, params: Record<string, unknown> = {}) {
+  if (!conn) return;
+  fetch(`${baseUrl()}/api/telemetry`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${conn.token}` },
+    body: JSON.stringify({ event, params }),
+  }).catch(() => { /* telemetry is best-effort */ });
+}
+
 // ------------------------------------------------------------------- types
 export type RunSummary = {
   run_id: string; name: string; status: string; created_at: number;
@@ -140,11 +155,13 @@ export type SlaProbe = {
   ttft_avg_ms?: number; ttft_p90_ms?: number; tpot_avg_ms?: number;
   tpot_p90_ms?: number; output_token_throughput?: number;
   hbm_hit_rate?: number; ext_hit_rate?: number;
+  elapsed_s?: number; preflight?: boolean;
 };
 export type SlaJob = {
   job_id: string; state: string; created_at?: number;
   sla: Record<string, number>; max_ok: number | null;
-  probes: SlaProbe[]; note: string; current?: number;
+  probes: SlaProbe[]; note: string; current?: number | null;
+  bisect?: [number, number] | null;
 };
 export type RoundRow = {
   round_index: number; phase: "warmup" | "full"; is_warmup: number;

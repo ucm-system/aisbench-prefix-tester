@@ -390,6 +390,45 @@ async def runs_active(authorization: str = Header(default="")):
     return {"run": None}
 
 
+# ---- soft delete (UI trash + undo window); delete-batch stays the hard path ----
+@app.get("/api/runs/trash")
+async def runs_trash_list(authorization: str = Header(default="")):
+    _auth(authorization)
+    return store.list_trashed()
+
+
+@app.post("/api/runs/trash")
+async def runs_trash(body: DeleteRunsReq, authorization: str = Header(default="")):
+    """Soft-delete: hide from the list but keep rows/artifacts for undo."""
+    _auth(authorization)
+    for rid in body.run_ids:
+        d = store.get_run(rid)
+        if d and d.get("status") == "running":
+            runner.stop_run(rid)
+            runner.wait_stopped(rid, timeout=20)
+    marked = store.soft_delete_runs(body.run_ids)
+    return {"ok": True, "deleted": marked}
+
+
+@app.post("/api/runs/restore")
+async def runs_restore(body: DeleteRunsReq, authorization: str = Header(default="")):
+    _auth(authorization)
+    restored = store.restore_runs(body.run_ids)
+    return {"ok": True, "restored": restored}
+
+
+@app.post("/api/runs/purge")
+async def runs_purge(body: DeleteRunsReq, authorization: str = Header(default="")):
+    """Hard delete (rows + on-disk artifacts) for trashed runs."""
+    _auth(authorization)
+    purged = []
+    for rid in body.run_ids:
+        if store.get_run(rid):
+            _delete_run_payload(rid)
+            purged.append(rid)
+    return {"ok": True, "purged": purged}
+
+
 @app.get("/api/runs/{run_id}")
 async def run_detail(run_id: str, authorization: str = Header(default="")):
     _auth(authorization)
@@ -431,16 +470,23 @@ async def run_stop(run_id: str, authorization: str = Header(default="")):
     return {"ok": True}
 
 
-@app.delete("/api/runs/{run_id}")
-async def run_delete(run_id: str, authorization: str = Header(default="")):
+@app.get("/api/runs/{run_id}/events")
+async def run_events(run_id: str, authorization: str = Header(default="")):
+    """Persisted run event journal (status/phase transitions with ts) — the
+    replay path uses it to draw exact phase-boundary lines on charts."""
     _auth(authorization)
-    runner.stop_run(run_id)
-    import shutil
-    run_dir = config.outputs_dir() / run_id
-    if run_dir.exists():
-        shutil.rmtree(run_dir, ignore_errors=True)
-    store.delete_run(run_id)
-    return {"ok": True}
+    if not store.get_run(run_id):
+        raise HTTPException(status_code=404, detail="run not found")
+    path = config.outputs_dir() / run_id / "events.jsonl"
+    if not path.exists():
+        return {"events": []}
+    out = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return {"events": out}
 
 
 @app.get("/api/runs/{run_id}/logs")
@@ -706,6 +752,28 @@ async def config_validate(body: ValidateReq, authorization: str = Header(default
     return validate_config(body.config)
 
 
+# --------------------------------------------------------------------------- telemetry (REDESIGN §9)
+class TelemetryReq(BaseModel):
+    event: str
+    params: dict = Field(default_factory=dict)
+
+
+@app.post("/api/telemetry")
+async def telemetry(body: TelemetryReq, authorization: str = Header(default="")):
+    """Local-only UX events (config_validate_result / run_submit / chart_export /
+    compare_run / sla_job_finish / error_surface) appended to home/telemetry.jsonl."""
+    _auth(authorization)
+    try:
+        path = config.HOME / "telemetry.jsonl"
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": time.time(), "event": body.event,
+                                "params": body.params}, ensure_ascii=False,
+                               default=str) + "\n")
+    except Exception:  # noqa: BLE001 — telemetry must never break the UI
+        logger.debug("telemetry write failed", exc_info=True)
+    return {"ok": True}
+
+
 @app.get("/api/diagnosis")
 async def diagnosis(authorization: str = Header(default="")):
     """Runtime-readiness check. Packaged builds are self-contained: this
@@ -841,6 +909,19 @@ async def ws_daemon(ws: WebSocket):
         events.unsubscribe("*", queue)
 
 
+# --------------------------------------------------------------------------- static UI (container mode)
+# mounted at import time (before main()) so BOTH launch paths serve it:
+# `python -m app.main` (desktop/tests: main() blocks in server.run) and
+# `uvicorn app.main:app` (container). Placing this after the __main__ guard
+# left the mount unreachable in the former mode — UI 404 in container mode.
+_UI_DIR = Path(os.environ["PT_UI_DIR"]) if os.environ.get("PT_UI_DIR") else None
+if _UI_DIR and _UI_DIR.is_dir():
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
+    logger.info("serving UI from %s", _UI_DIR)
+
+
 # --------------------------------------------------------------------------- main
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -887,11 +968,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-# --------------------------------------------------------------------------- static UI (container mode)
-_UI_DIR = Path(os.environ["PT_UI_DIR"]) if os.environ.get("PT_UI_DIR") else None
-if _UI_DIR and _UI_DIR.is_dir():
-    from fastapi.staticfiles import StaticFiles
-
-    app.mount("/", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
-    logger.info("serving UI from %s", _UI_DIR)

@@ -71,6 +71,9 @@ def _migrate(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE runs ADD COLUMN kind TEXT DEFAULT 'manual'")
         # backfill: pre-kind SLA probe runs are named "SLA c=<n> · ..."
         con.execute("UPDATE runs SET kind='sla' WHERE kind='manual' AND name LIKE 'SLA c=%'")
+    if "deleted_at" not in cols:
+        # soft delete (UI trash with undo window) — NULL = live row
+        con.execute("ALTER TABLE runs ADD COLUMN deleted_at REAL")
     # backfill: SLA probe runs whose stored config lost the rounds marker
     con.execute(
         "UPDATE runs SET config_json = json_set(config_json, '$.rounds', json('[{}]'))"
@@ -144,7 +147,7 @@ def get_run(run_id: str) -> dict | None:
 
 def list_runs(status: str | None = None, q: str | None = None,
               kind: str | None = None) -> list[dict]:
-    sql = "SELECT * FROM runs"
+    sql = "SELECT * FROM runs WHERE deleted_at IS NULL"
     conds, params = [], []
     if status:
         conds.append("status=?")
@@ -156,7 +159,7 @@ def list_runs(status: str | None = None, q: str | None = None,
         conds.append("kind=?")
         params.append(kind)
     if conds:
-        sql += " WHERE " + " AND ".join(conds)
+        sql += " AND " + " AND ".join(conds)
     sql += " ORDER BY created_at DESC"
     with _LOCK:
         rows = connect().execute(sql, params).fetchall()
@@ -183,9 +186,48 @@ def list_runs(status: str | None = None, q: str | None = None,
 
 def delete_run(run_id: str) -> None:
     with _LOCK:
-        connect().execute("DELETE FROM rounds WHERE run_id=?", (run_id,))
-        connect().execute("DELETE FROM runs WHERE run_id=?", (run_id,))
-        connect().commit()
+        con = connect()
+        con.execute("DELETE FROM rounds WHERE run_id=?", (run_id,))
+        con.execute("DELETE FROM runs WHERE run_id=?", (run_id,))
+        con.commit()
+
+
+# ------------------------------------------------------------- soft delete (UI trash)
+def soft_delete_runs(run_ids: list[str]) -> list[str]:
+    """Mark runs as trashed (deleted_at set). UI offers a 5s undo window;
+    list_runs/trash separation keeps the visible list clean without data loss."""
+    now = time.time()
+    with _LOCK:
+        con = connect()
+        marked = []
+        for rid in run_ids:
+            cur = con.execute("UPDATE runs SET deleted_at=? WHERE run_id=?"
+                              " AND deleted_at IS NULL", (now, rid))
+            if cur.rowcount:
+                marked.append(rid)
+        con.commit()
+    return marked
+
+
+def restore_runs(run_ids: list[str]) -> list[str]:
+    with _LOCK:
+        con = connect()
+        restored = []
+        for rid in run_ids:
+            cur = con.execute("UPDATE runs SET deleted_at=NULL WHERE run_id=?"
+                              " AND deleted_at IS NOT NULL", (rid,))
+            if cur.rowcount:
+                restored.append(rid)
+        con.commit()
+    return restored
+
+
+def list_trashed() -> list[dict]:
+    with _LOCK:
+        rows = connect().execute(
+            "SELECT run_id, name, status, created_at, deleted_at, kind FROM runs"
+            " WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC").fetchall()
+    return [_row_to_dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------- rounds

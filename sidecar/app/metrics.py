@@ -197,18 +197,48 @@ def flatten_snapshot(snapshot: dict[tuple, dict[str, float]]) -> dict[str, dict[
 
 
 class Collector:
-    """Async poll loop for one run. snapshot() is safe from the runner thread."""
+    """Async poll loop for one run. snapshot() is safe from the runner thread.
+
+    Adaptive cadence (U5.3): while requests are in flight (any queue gauge > 0
+    or counters moving) the loop tightens to `active_interval` (1s) so short
+    request windows produce real curves instead of 2-3 lonely spikes; idle
+    periods fall back to the configured interval. Hit-rate math is untouched —
+    it always diffs explicit before/after snapshots.
+    """
+
+    GAUGE_KEYS = ("running", "waiting", "swapped", "kv_usage")
+    _COUNTER_KEYS = ("prompt_tok", "gen_tok", "hbm_q", "ext_q", "ucm_q_tok", "success")
 
     def __init__(self, pods: List[str], interval: float = 5.0,
-                 on_sample: Optional[Callable[[dict], None]] = None):
+                 on_sample: Optional[Callable[[dict], None]] = None,
+                 active_interval: float = 1.0):
         self.pods = pods
         self.interval = interval
+        self.active_interval = max(0.5, min(active_interval, interval))
         self.on_sample = on_sample
         self.latest: dict[tuple, dict[str, float]] = {}
         self.ucm_detected = False
+        self.active = False
+        self._prev_totals: Dict[str, float] = {}
         self._task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
         self._lock = asyncio.Lock()
+
+    def _merged_totals(self, merged: dict[tuple, dict[str, float]]) -> Dict[str, float]:
+        totals: Dict[str, float] = {}
+        for counters in merged.values():
+            for k, v in counters.items():
+                totals[k] = totals.get(k, 0.0) + v
+        return totals
+
+    def _detect_activity(self, totals: Dict[str, float]) -> bool:
+        for g in self.GAUGE_KEYS:
+            if totals.get(g, 0) > 0:
+                return True
+        for c in self._COUNTER_KEYS:
+            if self._prev_totals and totals.get(c, 0) > self._prev_totals.get(c, 0):
+                return True
+        return False
 
     async def _poll_once(self) -> bool:
         any_ok = False
@@ -231,6 +261,9 @@ class Collector:
                 self.latest = merged
                 if any(c.get("_ucm_seen") for c in merged.values()):
                     self.ucm_detected = True
+                totals = self._merged_totals(merged)
+                self.active = self._detect_activity(totals)
+                self._prev_totals = totals
         if any_ok and self.on_sample:
             try:
                 self.on_sample(self.public_sample())
@@ -244,6 +277,7 @@ class Collector:
             "engines": {f"{p}|{e}|{w}": c for (p, e, w), c in self.latest.items()},
             "ucm_detected": self.ucm_detected,
             "pods_ok": True,
+            "active": self.active,
         }
 
     async def _loop(self) -> None:
@@ -252,8 +286,9 @@ class Collector:
                 await self._poll_once()
             except Exception:  # noqa: BLE001
                 logger.exception("poll cycle failed")
+            wait = self.active_interval if self.active else self.interval
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self.interval)
+                await asyncio.wait_for(self._stop.wait(), timeout=wait)
             except asyncio.TimeoutError:
                 pass
 

@@ -111,6 +111,7 @@ class SlaTuner(threading.Thread):
                 "sla": self.sla, "max_ok": self.max_ok,
                 "probes": [dict(p) for p in self.probes], "note": self.note,
                 "current": getattr(self, "current", None),
+                "bisect": getattr(self, "bisect", None),
             }
 
     def _publish(self):
@@ -256,7 +257,7 @@ class SlaTuner(threading.Thread):
                 it = 0
                 while hi - lo > max(2, lo // 8) and it < 5 and not self.cancelled.is_set():
                     mid = (lo + hi) // 2
-                    self._set("bisect", current=mid)
+                    self._set("bisect", current=mid, bisect=[lo, hi])
                     probe = self._probe(mid)
                     self.probes.append(probe)
                     self._publish()

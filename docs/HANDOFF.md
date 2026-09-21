@@ -199,3 +199,20 @@
 - **细节**：favicon 内联 SVG（消除控制台 404）；「校验配置」按钮反馈 toast（通过/警告/错误）。
 - 测试：test_api 16/16、test_features 17/17、test_e2e_battery 21/21（新 sidecar exe）全绿；PyInstaller + electron-builder 重建（portable + NSIS）。
 - **走查遗留（按需排期）**：日志流重复刷屏/tqdm 污染过滤；监控页完成后卡片衰减归零 + 结构化逐轮结果区；运行记录分页；默认参数温和化；发布流程「打包前对齐 main」约束。
+
+### 第十轮（UX v0.2 全量重设计落地：AUDIT 24 项 + U1–U8 一次性整改）
+
+依据 `docs/UX-AUDIT.md`（A1–G3 + U1–U8）与 `docs/UX-REDESIGN.md` v0.2，不分期一次改完。产品硬约束遵守：无监控常驻页签（仅开始测试跳转 + 记录页运行中行两个入口）、无数据集页（复用下拉/预览按钮移除，按参数自动生成随 run 落盘）。
+
+- **Sidecar 配合（不动编排与命中率口径）**：`metrics.Collector` 活动期自适应 1s 采样（gauge>0 或计数器在动即收紧，空闲回落，样本带 `active` 标记，U5.3）；`runner._record_event` 事件日志 `events.jsonl`（status/cache_reset/warning 带 ts 落盘，回放画阶段边界，C2）；`GET /api/runs/{id}/events` 回放端点；软删除 API（`/api/runs/trash|restore|purge` + runs.deleted_at 列，list 过滤，D1 撤销窗口；delete-batch 保持硬删兼容 CLI/测试）；sla 快照带 `bisect=[lo,hi]`；`POST /api/telemetry` 本地埋点（§9：config_validate_result/run_submit/run_finish/chart_export/compare_run/sla_job_finish/error_surface → home/telemetry.jsonl）。
+- **修复既有容器模式 bug**：静态 UI 挂载代码原位于 `if __name__=="__main__"` 之后，`python -m app.main` 启动时永不执行（UI 404）；移至 main() 定义前，两种启动方式均生效。
+- **前端重构（六页全部重写）**：新增 `ui.tsx`（StatusBadge 形状+颜色双编码/Modal/ConfirmModal/空载错三态/Breadcrumb/Pagination/InfoTip/CSV 下载/useLocalState/useElemWidth）与 `charts.tsx`（TimeSeriesChart：十字线 tooltip+框选缩放/双击复位+<8 点阶梯线+事件垂直线+轮次分隔带+右轴+抽稀；DualAxisChart：SLA 双轴曲线+命中区填充+拐点标注+行联动；Donut 中心=综合命中率；BarChart Δ% 柱顶标注）。theme.css 重写为 §7 视觉 token（8pt/字号/8 色图表色板/浅色同构）。
+- **新建测试页**：运行名称+预设首行（内置冒烟/标准 + /api/presets + diff 确认）；草稿自动保存（localStorage 去抖 600ms）；温和默认值（2048/32/16/c8）；tokenizer 单一选择器互斥+生效行+探测自动匹配；词表来源单选卡；采集端点 chip 化+空时联动 host:port/URL+逐端点 /metrics 可达点+「恢复联动」；URL 填写时地址/端口折叠为解析摘要；失焦即时校验+字段级红字；校验成功绿条/错误条点击滚动到字段；轮次表复制上一轮/恢复继承/删除确认/JSON 预校验；sticky 摘要卡+吸底操作区；<1180px 单列+摘要条化+操作吸底；全栅格 minmax(0,1fr)。
+- **监控页**：run 头部参数 chips+耗时+导出；KPI 6 等宽卡（理论命中率+偏差副行、无数据「—」不显假 0、口径 InfoTip）；12 列栅格等宽 280px 图表（队列深度+KV 合并双轴卡/吞吐/延迟/命中率趋势）；统一实时=回放 flatten（gauge 取 max、counter 求和，U5.4 根治）；阶段边界垂直线+轮次分隔带+轮次聚焦筛选；每图 CSV 导出；断线黄横幅+重连补拉；停止确认弹层；日志区全宽 240–600px 拖拽（记忆高度）+关键字搜索+折叠进度行+stdout/stderr 双 tab+双导出；饼图中心=综合命中率、非 UCM 收起带宽图与横幅进「指标说明」；端点不可达灰态；中断 run 显示中断时间点。
+- **记录页**：状态多选筛选+分页（50/页）；行 hover 浮出操作、运行中行整行高亮+呼吸点徽标+监控主按钮常驻；软删除+7s 撤销 toast+purge 硬删；抽屉 480px 固定右侧+遮罩从顶栏下开始+ESC/点遮罩关闭。
+- **对比页**：顶部粘性操作条（已选 chips 可移除+排除选项+常驻开始对比）；结果 tab 化（指标总览对柱图+Δ% 柱顶标注/逐轮对比/DP 矩阵/配置差异/导出）；练习轮半透明+已排除徽标+计数；空状态图示引导。
+- **SLA 页**：上下结构；进度条+阶段文案（爬升 c=N/二分 [lo,hi]）+停止调优；并发-延迟双轴曲线（SLA 阈值线+绿色满足区+拐点「SLA 内最大并发=N」+探针表 hover 联动高亮）；中断任务结果卡显示状态徽标+已探明参考值；历史表列宽固定+说明列 ellipsis+悬停全文+选中高亮+「查看：<时间>」+返回最新。
+- **设置页**：左侧 4 tab（通用/压测执行/Tokenizer 资产/关于）；环境诊断折叠为一行摘要（展开才逐项+重新检测+重启 Sidecar 确认弹层含活动 run 警告+loading）；Tokenizer 列表管理（来源/路径/测试加载/删除）；采集间隔改「新 run 默认」+两处互相标注。
+- **全局**：favicon+侧栏 logo（层叠块+命中闪电 SVG）；术语中文化（前缀缓存查询构成等）+口径 InfoTip；焦点环 focus-visible；图表 aria-label/<title>；图例线型区分（实/虚/点）；断连黄条；监控路由顶栏面包屑「← 运行记录」+侧栏高亮归并；活动 run 顶栏提示保留到查看过为止。
+- **验收**：`npx tsc --noEmit` 0 错误；`npm run build` 成功；test_features/test_api 全绿；新增 `tools/tests/test_ux_flow.py`（mock 8091 源码模式全流程 22/22：发起→WS 事件→回放 events/metrics→软删/恢复/清除→对比导出）；新增 `tools/tests/ux_dom_check.py`（CDP headless Edge 40/40：6 页×2 视口无横向溢出 + 28 项结构断言）与 `tools/tests/ux_screens.py`（1440/1024 截图 12 张 → docs/screenshots/ux2-*.png 供人工复核；本会话模型无图片输入，几何/结构断言程序化替代目检）。
+- **遗留**：打包产物重建（portable/NSIS）待下轮与发布流程一起做；日志去重（同一行重复刷屏）未在本轮范围。

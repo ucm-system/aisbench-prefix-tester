@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { api, initConnection, onSidecarExited, restartSidecar, useConnected } from "./api";
+import { api, initConnection, onSidecarExited, restartSidecar, track, useConnected } from "./api";
+import { STATUS_TEXT, type ToastPayload } from "./ui";
 import ConfigPage from "./pages/ConfigPage";
 import MonitorPage from "./pages/MonitorPage";
 import HistoryPage from "./pages/HistoryPage";
@@ -7,28 +8,41 @@ import ComparePage from "./pages/ComparePage";
 import SettingsPage from "./pages/SettingsPage";
 import SlaPage from "./pages/SlaPage";
 
-type Toast = (msg: string) => void;
-const ToastCtx = createContext<Toast>(() => {});
+type ToastFn = (msg: string | ToastPayload) => void;
+const ToastCtx = createContext<ToastFn>(() => {});
 export const useToast = () => useContext(ToastCtx);
 
 export function navigate(hash: string) {
   location.hash = hash;
 }
 
+/** 应用图标（A4：层叠块=前缀缓存层 + 高亮=命中） */
+export function AppIcon({ size = 22 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" rx="7" fill="#2f6ff0" />
+      <rect x="6" y="19" width="20" height="4" rx="1.5" fill="#fff" opacity=".55" />
+      <rect x="6" y="13" width="20" height="4" rx="1.5" fill="#fff" opacity=".8" />
+      <path d="M13 4l-4 8h4l-2 6 7-9h-4l3-5z" fill="#fbbf24" />
+    </svg>
+  );
+}
+
 const TITLES: Record<string, [string, string]> = {
-  config: ["新建测试", "配置 · 预设 · 数据集 · 多轮计划"],
+  config: ["新建测试", "连接服务 · 配置参数 · 多轮计划"],
   monitor: ["运行监控", "实时指标 · 日志流 · 阶段进度"],
   history: ["运行记录", "详情 / 导出 / 标记"],
   compare: ["对比分析", "排除预埋与练习轮"],
-  settings: ["设置", "环境诊断 · 采集 · 关于"],
+  settings: ["设置", "通用 · 压测执行 · 诊断"],
   sla: ["SLA 调优", "相同命中率下搜索最大可用并发"],
 };
 
 export default function App() {
   const [route, setRoute] = useState(location.hash.replace(/^#\/?/, "") || "config");
-  const [toastMsg, setToastMsg] = useState("");
+  const [toasts, setToasts] = useState<(ToastPayload & { id: number })[]>([]);
   const [sidecarDown, setSidecarDown] = useState(false);
   const [activeRun, setActiveRun] = useState<{ run_id: string; name: string } | null>(null);
+  const [viewedRun, setViewedRun] = useState(localStorage.getItem("pt-viewed-run") || "");
   const connected = useConnected();
 
   useEffect(() => {
@@ -37,11 +51,19 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // monitor/datasets are no longer nav tabs: monitor is reached via jumps,
-  // datasets management moved into config/settings — redirect stale hashes
+  // 数据集页已裁撤（产品决策）：旧 hash 重定向到配置页
   useEffect(() => {
     if (route.split("/")[0] === "datasets") navigate("/config");
   }, [route]);
+
+  // 记录「已查看」的运行中 run：顶栏提示保留到被查看过为止（A1）
+  useEffect(() => {
+    if (route.startsWith("monitor/") && viewedRun !== route.split("/")[1]) {
+      const id = route.split("/")[1];
+      setViewedRun(id);
+      localStorage.setItem("pt-viewed-run", id);
+    }
+  }, [route, viewedRun]);
 
   useEffect(() => {
     const saved = localStorage.getItem("pt-theme") || "auto";
@@ -49,13 +71,10 @@ export default function App() {
     else document.documentElement.dataset.theme = saved;
   }, []);
   useEffect(() => {
-    // fire-and-forget: resolves once the self-contained environment is ready;
-    // the UI shell renders immediately and pages fill in as data arrives
     initConnection();
     onSidecarExited(() => setSidecarDown(true));
   }, []);
 
-  // global "a run is active" indicator → jump back into the live monitor view
   useEffect(() => {
     if (!connected) return;
     const tick = async () => {
@@ -69,22 +88,36 @@ export default function App() {
     return () => clearInterval(t);
   }, [connected]);
 
-  const toastTimer = useRef<number | null>(null);
-  const toast = useCallback<Toast>((msg) => {
-    setToastMsg(msg);
-    if (toastTimer.current) window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToastMsg(""), 2600);
+  // toast 队列：错误常驻（手动关闭），其余自动消失（§5）
+  const toastId = useRef(0);
+  const toast = useCallback<ToastFn>((msgOrPayload) => {
+    const p: ToastPayload = typeof msgOrPayload === "string"
+      ? { msg: msgOrPayload } : msgOrPayload;
+    const id = ++toastId.current;
+    setToasts((ts) => [...ts.slice(-2), { ...p, id }]);
+    if (p.kind === "error") {
+      track("error_surface", { code: p.msg.slice(0, 200), page: location.hash.slice(2) || "config" });
+    }
+    const dur = p.duration ?? (p.kind === "error" ? 0 : p.action ? 7000 : 5000);
+    if (dur > 0) {
+      window.setTimeout(() => setToasts((ts) => ts.filter((t) => t.id !== id)), dur);
+    }
   }, []);
+  const closeToast = (id: number) => setToasts((ts) => ts.filter((t) => t.id !== id));
 
   const pageKey = route.split("/")[0];
   const [title, crumb] = TITLES[pageKey] ?? TITLES.monitor;
+  const monitorId = pageKey === "monitor" ? route.split("/")[1] : "";
+  const showActive = activeRun && activeRun.run_id !== viewedRun;
 
-  const nav = (key: string, label: string, icon: React.ReactNode, badge?: number) => (
-    <div key={key} className={`nav-item${pageKey === key ? " active" : ""}`}
-      onClick={() => navigate(`/${key}`)}>
+  const nav = (key: string, label: string, icon: React.ReactNode) => (
+    <div key={key}
+      className={`nav-item${(pageKey === key) || (key === "history" && pageKey === "monitor") ? " active" : ""}`}
+      onClick={() => navigate(`/${key}`)}
+      role="link" tabIndex={0}
+      onKeyDown={(e) => e.key === "Enter" && navigate(`/${key}`)}>
       {icon}
       {label}
-      {badge ? <span className="nav-badge">{badge}</span> : null}
     </div>
   );
   const i = (d: string) => (
@@ -95,20 +128,20 @@ export default function App() {
     <ToastCtx.Provider value={toast}>
       <aside id="sidebar">
         <div className="logo">
-          <div className="logo-mark">PC</div>
+          <div className="logo-mark"><AppIcon size={22} /></div>
           <div><b>前缀复用测试器</b><span>AISBench Prefix Tester</span></div>
         </div>
         <nav className="nav">
           {nav("config", "新建测试", i("M12 5v14M5 12h14"))}
           {nav("history", "运行记录", i("M3 12a9 9 0 1 0 9-9 9 9 0 0 0-7.6 4.2M3 3v5h5"))}
           {nav("compare", "对比分析", i("M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3M12 1v22"))}
-          {nav("settings", "设置", i("M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5h.1a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"))}
           {nav("sla", "SLA 调优", i("M3 3v18h18M8 17V9m5 8V5m5 12v-6"))}
+          {nav("settings", "设置", i("M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5h.1a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"))}
         </nav>
         <div className="side-foot">
           Sidecar{" "}
           <span className={connected ? "ok" : ""}>
-            {connected ? "● 已连接" : "○ 启动中"}
+            {connected ? "● 已连接" : "○ 连接中"}
           </span>
           <br />
           前缀复用测试器 v0.1.0
@@ -117,19 +150,32 @@ export default function App() {
 
       <div id="main">
         <header id="topbar">
-          <h1>{title}</h1>
-          <span className="crumb">{crumb}</span>
+          {pageKey === "monitor" && monitorId ? (
+            <>
+              <h1>{title}</h1>
+              <span className="crumb">
+                <a onClick={() => navigate("/history")} style={{ cursor: "pointer" }}>← 运行记录</a>
+                {" / "}
+                <span className="mono">{monitorId}</span>
+              </span>
+            </>
+          ) : (
+            <>
+              <h1>{title}</h1>
+              <span className="crumb">{crumb}</span>
+            </>
+          )}
           <div className="top-right">
-            {activeRun && (
+            {showActive && (
               <span className="chip" style={{ cursor: "pointer", borderColor: "var(--brand)", color: "var(--text)" }}
                 title="有正在运行的测试，点击打开运行监控"
-                onClick={() => navigate(`/monitor/${activeRun.run_id}`)}>
-                <span className="dot pulse" /> {activeRun.name}
+                onClick={() => navigate(`/monitor/${activeRun!.run_id}`)}>
+                <span className="dot pulse" /> {activeRun!.name}
               </span>
             )}
             <span className="chip">
               <span className="dot" style={{ background: connected ? undefined : "#e5484d" }} />
-              {connected ? "Sidecar 就绪" : "Sidecar 启动中"}
+              {connected ? "Sidecar 就绪" : "Sidecar 连接中"}
             </span>
           </div>
         </header>
@@ -148,26 +194,35 @@ export default function App() {
             </div>
           )}
           {!connected && !sidecarDown && (
-            <div className="banner info">
-              ⏳ 运行环境启动中（自包含预热约 30-60 秒）— 页面可先浏览，数据就绪后自动加载
+            <div className="banner warn">
+              ⚠ 服务未连接，重连中…（自包含环境预热约 30–60 秒，页面可先浏览，数据就绪后自动加载）
             </div>
           )}
-          <>
+          <div className="page">
             {pageKey === "config" && <ConfigPage />}
             {pageKey === "monitor" && <MonitorPage route={route} />}
             {pageKey === "history" && <HistoryPage />}
             {pageKey === "compare" && <ComparePage />}
             {pageKey === "settings" && <SettingsPage />}
             {pageKey === "sla" && <SlaPage />}
-          </>
+          </div>
         </div>
       </div>
-      <div id="toast" style={{
-        position: "fixed", bottom: 26, left: "50%", transform: `translateX(-50%) translateY(${toastMsg ? 0 : 80}px)`,
-        background: "var(--bg3)", border: "1px solid var(--border2)", color: "var(--text)",
-        padding: "10px 18px", borderRadius: 10, fontSize: 12.5, zIndex: 99, transition: ".25s",
-        boxShadow: "0 10px 30px rgba(0,0,0,.5)",
-      }}>{toastMsg}</div>
+
+      <div id="toast">
+        {toasts.map((t) => (
+          <div key={t.id} className={`toast-item ${t.kind ?? ""}`} role="status">
+            <span>{t.kind === "success" ? "✓ " : t.kind === "error" ? "✕ " : ""}{t.msg}</span>
+            {t.action && (
+              <button className="t-act" onClick={() => { t.action!.onClick(); closeToast(t.id); }}>
+                {t.action.label}
+              </button>)}
+            <button className="t-x" aria-label="关闭提示" onClick={() => closeToast(t.id)}>✕</button>
+          </div>
+        ))}
+      </div>
     </ToastCtx.Provider>
   );
 }
+
+export { STATUS_TEXT };

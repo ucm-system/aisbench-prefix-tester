@@ -118,9 +118,27 @@ def _status(handle: RunHandle, status: str, **extra) -> None:
     if status in ("completed", "failed", "cancelled"):
         fields["finished_at"] = time.time()
     store.update_run(handle.run_id, **fields)
-    events.publish(handle.run_id, "status", status=status,
-                   round=handle.round_index, total_rounds=handle.total_rounds,
-                   phase=handle.phase, **extra)
+    _record_event(handle.run_id, "status", status=status,
+                  round=handle.round_index, total_rounds=handle.total_rounds,
+                  phase=handle.phase, **extra)
+
+
+def _record_event(run_id: str, etype: str, **data) -> None:
+    """Publish to the bus AND journal to <run>/events.jsonl with an exact ts.
+
+    Timeline-relevant events only (status/phase/cache_reset/warning): the
+    monitor's replay path reads the journal to draw phase-boundary lines
+    identical to the live WS view. Pure addition — no orchestration change.
+    """
+    events.publish(run_id, etype, **data)
+    try:
+        p = config.outputs_dir() / run_id / "events.jsonl"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"type": etype, "ts": time.time(), **data},
+                               ensure_ascii=False, default=str) + "\n")
+    except Exception:  # noqa: BLE001 — journaling must never break a run
+        logger.debug("event journal write failed", exc_info=True)
 
 
 def _sync_await(coro):
@@ -224,8 +242,8 @@ def _execute(handle: RunHandle) -> None:
                 rc["seed"] = int(rc["seed"]) + (round_index - 1) * 1000
             handle.round_index = round_index
             handle.phase = "warmup"
-            events.publish(run_id, "status", status="running", round=round_index,
-                           total_rounds=handle.total_rounds, phase="warmup")
+            _record_event(run_id, "status", status="running", round=round_index,
+                          total_rounds=handle.total_rounds, phase="warmup")
 
             warnings = _reset_cache_if_needed(handle, cfg, round_index)
 
@@ -287,8 +305,8 @@ def _execute(handle: RunHandle) -> None:
 
             # ---- phase 2: full ----
             handle.phase = "full"
-            events.publish(run_id, "status", status="running", round=round_index,
-                           total_rounds=handle.total_rounds, phase="full")
+            _record_event(run_id, "status", status="running", round=round_index,
+                          total_rounds=handle.total_rounds, phase="full")
             events.publish(run_id, "log", stream="stdout",
                            line=f"[Round {round_index}/{handle.total_rounds}] Phase 2 full: "
                                 f"concurrency={rc['concurrency']}, output_len={rc['output_len']}")
@@ -388,7 +406,7 @@ def _reset_cache_if_needed(handle: RunHandle, cfg: dict, round_index: int) -> li
     need = (policy == "each_round") or (policy == "first_round_only" and round_index == 1)
     if policy == "never":
         warnings.append("cache_reset=never: 轮间可能存在残留命中")
-        events.publish(handle.run_id, "warning", message=warnings[0])
+        _record_event(handle.run_id, "warning", message=warnings[0])
         return warnings
     if not need:
         return warnings
@@ -398,9 +416,9 @@ def _reset_cache_if_needed(handle: RunHandle, cfg: dict, round_index: int) -> li
     failed = {p: r for p, r in results.items() if r != "ok"}
     if failed:
         warnings.append(f"cache reset failed on {len(failed)} pod(s); residual hits possible")
-        events.publish(handle.run_id, "warning",
-                       message=f"reset_prefix_cache 失败: {failed}，轮间可能残留命中")
-    events.publish(handle.run_id, "cache_reset", results=results, round=round_index)
+        _record_event(handle.run_id, "warning",
+                      message=f"reset_prefix_cache 失败: {failed}，轮间可能残留命中")
+    _record_event(handle.run_id, "cache_reset", results=results, round=round_index)
     return warnings
 
 

@@ -1,16 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, downloadLink, wsRun, type RoundRow } from "../api";
-import { LineChart, Donut } from "../charts";
+import { api, downloadLink, track, wsRun, type RoundRow } from "../api";
+import { Donut, TimeSeriesChart } from "../charts";
 import { useToast } from "../App";
+import { ConfirmModal, InfoTip, StatusBadge, downloadTextFile, toCsv, useLocalState, fmtDur } from "../ui";
 
 type Ev = { type: string; ts: number; [k: string]: any };
+type Sample = { ts: number; engines: Record<string, Record<string, number>>; ucm?: boolean };
 
-const HBM = "#4f8bff", EXT = "#13c2c2", UCMC = "#9254de";
-const STATUS_TEXT: Record<string, string> = {
-  completed: "已完成", running: "运行中", failed: "失败", cancelled: "已停止",
-  pending: "排队中", connecting: "连接中", reconnecting: "连接断开",
-  not_found: "记录不存在", load_failed: "加载失败",
-};
+const HBM = "var(--hbm)", EXT = "var(--ext)", UCMC = "var(--ucm)", MISS = "var(--miss)";
+const Q_RUN = "var(--run-q)", Q_WAIT = "var(--wait-q)", Q_SWAP = "var(--swap-q)";
+const T_GREEN = "var(--green)", T_PURPLE = "var(--chart-5)", T_ORANGE = "var(--warn)";
+
+/* 统一 gauge/counter 口径（U5.4：实时与回放走同一 flatten） */
+const GAUGE_KEYS = new Set(["running", "waiting", "swapped", "kv_usage"]);
+function flatten(engines: Record<string, Record<string, number>>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const counters of Object.values(engines ?? {})) {
+    for (const [k, v] of Object.entries(counters)) {
+      const n = Number(v) || 0;
+      out[k] = GAUGE_KEYS.has(k) ? Math.max(out[k] ?? 0, n) : (out[k] ?? 0) + n;
+    }
+  }
+  return out;
+}
+
+/* 进度行折叠正则（C5） */
+const PROGRESS_RE = /Progress:|POST=|Calculating performance|\d{1,3}%\s*\||it\/s\]|^\s*$/;
 
 export default function MonitorPage({ route }: { route: string }) {
   const toast = useToast();
@@ -21,28 +36,69 @@ export default function MonitorPage({ route }: { route: string }) {
   const [phase, setPhase] = useState("");
   const [round, setRound] = useState(0);
   const [totalRounds, setTotalRounds] = useState(1);
-  const [samples, setSamples] = useState<{ ts: number; flat: Record<string, number> }[]>([]);
+  const [samples, setSamples] = useState<Sample[]>([]);
   const [phaseRate, setPhaseRate] = useState<{ per_dp: any; per_pod?: any; agg: any; phase: string } | null>(null);
   const [ucm, setUcm] = useState<boolean | null>(null);
   const [detail, setDetail] = useState<any>(null);
   const [filter, setFilter] = useState("all");
+  const [logTab, setLogTab] = useState<"stdout" | "stderr">("stdout");
+  const [search, setSearch] = useState("");
+  const [collapseProg, setCollapseProg] = useLocalState("pt-collapse-prog", true);
+  const [logH, setLogH] = useLocalState("pt-log-h", 360);
+  const [roundFilter, setRoundFilter] = useState<number | "all">("all");
+  const [now, setNow] = useState(Math.floor(Date.now() / 1000));
+  const [stopOpen, setStopOpen] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
   const wsRef = useRef<WebSocket | null>(null);
+  const resizeRef = useRef<{ startY: number; startH: number } | null>(null);
 
-  // load past data if the run already exists; WS lifecycle owned by THIS effect
-  // (alive flag + wsRef) so switching runs can't leak sockets or mix streams
+  useEffect(() => {
+    if (status === "running") {
+      const t = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
+      return () => clearInterval(t);
+    }
+  }, [status]);
+
+  /* run_finish 埋点（REDESIGN §9）：终态一次性上报 */
+  const finishTracked = useRef("");
+  useEffect(() => {
+    if (!runId || !detail) return;
+    if (["completed", "failed", "cancelled", "interrupted"].includes(status)
+        && finishTracked.current !== runId) {
+      finishTracked.current = runId;
+      track("run_finish", {
+        run_id: runId, status,
+        duration_s: Math.round(((detail.finished_at ?? Date.now() / 1000) - detail.created_at) || 0),
+      });
+    }
+  }, [status, runId, detail]);
+
+  /* ---------------- data lifecycle（WS 拥有；回放与实时同一份 samples） ---------------- */
   useEffect(() => {
     if (!runId) return;
     let alive = true;
     let closed = false;
     setEvents([]); setLogs([]); setSamples([]); setPhaseRate(null);
-    setDetail(null); setUcm(null); setPhase(""); setRound(0);
+    setDetail(null); setUcm(null); setPhase(""); setRound(0); setRoundFilter("all");
     setStatus("connecting");
     const toLog = (line: string) => ({
       line, err: line.includes("ERROR") || line.startsWith("[exit"),
       warn: line.includes("WARN"),
     });
+
+    const loadSamples = () =>
+      api.get<{ samples: Sample[] }>(`/api/runs/${runId}/metrics`).then((r) => {
+        if (!alive) return;
+        setSamples((prev) => {
+          const seen = new Set(prev.map((s) => s.ts));
+          const add = (r.samples ?? []).filter((s) => !seen.has(s.ts));
+          return add.length ? [...prev, ...add].sort((a, b) => a.ts - b.ts).slice(-6000) : prev;
+        });
+        const first = (r.samples ?? [])[0];
+        if (first?.engines && Object.values(first.engines).some((c) => c._ucm_seen)) setUcm(true);
+      }).catch(() => {});
+
     api.get<any>(`/api/runs/${runId}`).then((d) => {
       if (!alive) return;
       setDetail(d);
@@ -53,51 +109,44 @@ export default function MonitorPage({ route }: { route: string }) {
       if (lastRow) setRound(lastRow.round_index);
       const lastFull = [...rounds].reverse().find((r) => r.phase === "full");
       if (lastFull) setPhaseRate({ per_dp: lastFull.hit_rate?.per_dp, agg: lastFull.hit_rate?.aggregated, phase: "full" });
-      // backfill the log tail so mid-run monitoring shows history too
       api.get<{ lines: string[] }>(`/api/runs/${runId}/logs?tail=500`).then((r) => {
         if (alive) setLogs((r.lines ?? []).map(toLog));
       }).catch(() => {});
-      // completed runs: replay persisted timeseries so charts still render
-      api.get<{ samples: any[] }>(`/api/runs/${runId}/metrics`).then((r) => {
-        if (!alive) return;
-        const gauges = new Set(["running", "waiting", "swapped", "kv_usage"]);
-        const flatSamples = (r.samples ?? []).map((s) => {
-          const engines: Record<string, Record<string, number>> = s.engines ?? {};
-          let flat: Record<string, number> = {};
-          for (const counters of Object.values(engines)) {
-            for (const [k, v] of Object.entries(counters)) {
-              flat[k] = gauges.has(k) ? Math.max(flat[k] ?? 0, Number(v)) : (flat[k] ?? 0) + Number(v);
-            }
-          }
-          return { ts: s.ts as number, flat };
-        });
-        setSamples(flatSamples);
-        if (flatSamples.length && flatSamples[0].flat._ucm_seen) setUcm(true);
+      loadSamples();
+      /* 回放阶段边界：读持久化事件日志（C2，与实时一致） */
+      api.get<{ events: Ev[] }>(`/api/runs/${runId}/events`).then((r) => {
+        if (alive && r.events?.length) setEvents(r.events);
       }).catch(() => {});
       if (d.status === "running" || d.status === "pending") {
-        // WS with auto-reconnect: the sidecar is busy spawning subprocesses
-        // during runs, so the socket can drop — resync state on every reconnect
-        let closed = false;
         const connectWs = () => {
           if (!alive || closed) return;
           const ws = wsRun(runId);
           wsRef.current = ws;
+          ws.onopen = () => {
+            if (!alive) return;
+            setStatus((s) => (s === "reconnecting" ? "running" : s));
+            loadSamples(); // 断线恢复后补拉缺失时序（C6）
+            api.get<{ events: Ev[] }>(`/api/runs/${runId}/events`).then((r) => {
+              if (alive && r.events?.length) setEvents(r.events);
+            }).catch(() => {});
+          };
           ws.onmessage = (m) => {
             if (!alive) return;
             const ev: Ev = JSON.parse(m.data);
-            setEvents((prev) => [...prev.slice(-4000), ev]);
+            if (ev.type !== "log" && ev.type !== "metrics") setEvents((prev) => [...prev.slice(-4000), ev]);
             if (ev.type === "status") {
               setStatus(ev.status); setPhase(ev.phase ?? ""); setRound(ev.round ?? 0);
               setTotalRounds(ev.total_rounds ?? 1);
             } else if (ev.type === "log") {
               setLogs((prev) => [...prev.slice(-3000), toLog(ev.line as string)]);
             } else if (ev.type === "metrics") {
-              setSamples((prev) => [...prev.slice(-600), { ts: ev.ts, flat: ev.sample.flat }]);
+              setSamples((prev) => [...prev.slice(-6000),
+                { ts: ev.ts, engines: ev.sample?.engines ?? {}, ucm: ev.sample?.ucm_detected }]);
               if (ev.sample?.ucm_detected != null) setUcm(ev.sample.ucm_detected);
             } else if (ev.type === "phase_rate") {
               setPhaseRate({ per_dp: ev.rate?.per_dp, agg: ev.rate?.aggregated, phase: ev.phase });
             } else if (ev.type === "warning") {
-              toast(ev.message);
+              toast({ msg: ev.message, kind: "error", duration: 8000 });
             }
           };
           ws.onclose = () => {
@@ -109,8 +158,8 @@ export default function MonitorPage({ route }: { route: string }) {
                 const d2 = await api.get<any>(`/api/runs/${runId}`);
                 if (!alive) return;
                 if (d2.status !== "running" && d2.status !== "pending") {
-                  // run finished while disconnected: adopt terminal state
                   setStatus(d2.status);
+                  loadSamples();
                   return;
                 }
                 connectWs();
@@ -131,106 +180,237 @@ export default function MonitorPage({ route }: { route: string }) {
     };
   }, [runId]);
 
+  /* stderr tab：轮询 stderr.log（C5） */
+  const [stderrLines, setStderrLines] = useState<string[]>([]);
   useEffect(() => {
-    if (followRef.current && logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
-    }
-  }, [logs]);
+    if (logTab !== "stderr" || !runId) return;
+    let stop = false;
+    const fetchIt = () => api.get<{ lines: string[] }>(`/api/runs/${runId}/logs?stream=stderr&tail=400`)
+      .then((r) => { if (!stop) setStderrLines(r.lines ?? []); }).catch(() => {});
+    fetchIt();
+    const t = setInterval(fetchIt, 3000);
+    return () => { stop = true; clearInterval(t); };
+  }, [logTab, runId, status]);
 
-  // sliding-window rates from consecutive samples (5s collector cadence)
+  useEffect(() => {
+    if (followRef.current && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [logs, stderrLines, logTab]);
+
+  /* 日志高度拖拽（U5.6） */
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!resizeRef.current) return;
+      const dh = resizeRef.current.startY - e.clientY;
+      setLogH(Math.max(240, Math.min(600, resizeRef.current.startH + dh)));
+    };
+    const onUp = () => { resizeRef.current = null; };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+  }, [setLogH]);
+
+  /* ---------------- 统一派生（flatten + 滑动窗差分，实时=回放） ---------------- */
+  const flats = useMemo(() => samples.map((s) => ({ ts: s.ts, f: flatten(s.engines) })), [samples]);
+
+  const roundsBounds = useMemo(() => {
+    const marks = events.filter((e) => e.type === "status" && e.phase && e.round);
+    const byRound = new Map<number, { warmup?: number; full?: number }>();
+    marks.forEach((m) => {
+      const slot = byRound.get(m.round) ?? {};
+      if (m.phase === "warmup" && slot.warmup == null) slot.warmup = m.ts;
+      if (m.phase === "full" && slot.full == null) slot.full = m.ts;
+      byRound.set(m.round, slot);
+    });
+    return [...byRound.entries()].sort((a, b) => a[0] - b[0]).map(([r, m]) => ({
+      round: r, start: m.warmup ?? m.full ?? 0,
+    }));
+  }, [events]);
+
+  const scope = useMemo(() => {
+    if (roundFilter === "all") return null;
+    const idx = roundsBounds.findIndex((r) => r.round === roundFilter);
+    if (idx < 0) return null;
+    const from = roundsBounds[idx].start;
+    const to = idx + 1 < roundsBounds.length ? roundsBounds[idx + 1].start : Infinity;
+    return { from, to };
+  }, [roundFilter, roundsBounds]);
+
+  const scopedFlats = useMemo(() =>
+    scope ? flats.filter((s) => s.ts >= scope.from - 1 && s.ts <= scope.to) : flats, [flats, scope]);
+
   const trend = useMemo(() => {
-    const hbm: number[] = [], ext: number[] = [], comp: number[] = [];
-    const run: number[] = [], wait: number[] = [], kv: number[] = [], swap: number[] = [];
-    const genRate: number[] = [], promptRate: number[] = [], ttftT: number[] = [], tpotT: number[] = [];
-    const ucmLoadBw: number[] = [], ucmDumpBw: number[] = [], posixRate: number[] = [];
-    let prev = samples[0]?.flat;
-    let prevTs = samples[0]?.ts;
-    for (const s of samples) {
-      const f = s.flat;
-      const dt = prev && prevTs != null ? Math.max(0.001, s.ts - prevTs) : 1;
-      const dq = prev ? f.hbm_q - prev.hbm_q : 0;
-      const deq = prev ? f.ext_q - prev.ext_q : 0;
-      const hr = dq > 0 ? (f.hbm_h - prev.hbm_h) / dq : null;
-      const er = deq > 0 ? (f.ext_h - prev.ext_h) / deq : null;
-      hbm.push(hr == null ? NaN : hr * 100);
-      ext.push(er == null ? NaN : er * 100);
-      comp.push(hr != null && er != null ? (er * (1 - hr) + hr) * 100 : NaN);
-      run.push(f.running ?? 0);
-      wait.push(f.waiting ?? 0);
-      swap.push(f.swapped ?? 0);
-      kv.push((f.kv_usage ?? 0) * 100);
-      genRate.push(prev ? Math.max(0, (f.gen_tok - prev.gen_tok) / dt) : 0);
-      promptRate.push(prev ? Math.max(0, (f.prompt_tok - prev.prompt_tok) / dt) : 0);
-      const dc = prev ? f.ttft_cnt - prev.ttft_cnt : 0;
-      ttftT.push(dc > 0 ? ((f.ttft_sum - prev.ttft_sum) / dc) * 1000 : NaN);
-      const di = prev ? f.itl_cnt - prev.itl_cnt : 0;
-      tpotT.push(di > 0 ? ((f.itl_sum - prev.itl_sum) / di) * 1000 : NaN);
-      ucmLoadBw.push(prev && dt > 0 ? Math.max(0, ((f.ucm_cache_load ?? 0) - (prev.ucm_cache_load ?? 0)) / dt / 1e9) : 0);
-      ucmDumpBw.push(prev && dt > 0 ? Math.max(0, ((f.ucm_cache_dump ?? 0) - (prev.ucm_cache_dump ?? 0)) / dt / 1e9) : 0);
-      const dpq = prev ? f.posix_q_blk - prev.posix_q_blk : 0;
-      const dph = prev ? f.posix_hit_blk - prev.posix_hit_blk : 0;
-      posixRate.push(dpq > 0 ? (dph / dpq) * 100 : NaN);
-      prev = f; prevTs = s.ts;
+    const out = {
+      hbm: [] as number[], ext: [] as number[], comp: [] as number[],
+      run: [] as number[], wait: [] as number[], swap: [] as number[], kv: [] as number[],
+      genRate: [] as number[], promptRate: [] as number[],
+      ttftT: [] as number[], tpotT: [] as number[],
+      ucmLoadBw: [] as number[], ucmDumpBw: [] as number[], posixRate: [] as number[],
+      ts: [] as number[],
+    };
+    let prev: Record<string, number> | null = null;
+    let prevTs: number | null = null;
+    for (const { ts, f } of scopedFlats) {
+      const dt = prev && prevTs != null ? Math.max(0.001, ts - prevTs) : 1;
+      const dq = prev ? (f.hbm_q ?? 0) - (prev.hbm_q ?? 0) : 0;
+      const deq = prev ? (f.ext_q ?? 0) - (prev.ext_q ?? 0) : 0;
+      const hr = dq > 0 && prev ? ((f.hbm_h ?? 0) - (prev.hbm_h ?? 0)) / dq : null;
+      const er = deq > 0 && prev ? ((f.ext_h ?? 0) - (prev.ext_h ?? 0)) / deq : null;
+      out.ts.push(ts);
+      out.hbm.push(hr == null ? NaN : hr * 100);
+      out.ext.push(er == null ? NaN : er * 100);
+      out.comp.push(hr != null && er != null ? (er * (1 - hr) + hr) * 100 : NaN);
+      out.run.push(f.running ?? 0);
+      out.wait.push(f.waiting ?? 0);
+      out.swap.push(f.swapped ?? 0);
+      out.kv.push((f.kv_usage ?? 0) * 100);
+      out.genRate.push(prev ? Math.max(0, ((f.gen_tok ?? 0) - (prev.gen_tok ?? 0)) / dt) : 0);
+      out.promptRate.push(prev ? Math.max(0, ((f.prompt_tok ?? 0) - (prev.prompt_tok ?? 0)) / dt) : 0);
+      const dc = prev ? (f.ttft_cnt ?? 0) - (prev.ttft_cnt ?? 0) : 0;
+      out.ttftT.push(dc > 0 && prev ? (((f.ttft_sum ?? 0) - (prev.ttft_sum ?? 0)) / dc) * 1000 : NaN);
+      const di = prev ? (f.itl_cnt ?? 0) - (prev.itl_cnt ?? 0) : 0;
+      out.tpotT.push(di > 0 && prev ? (((f.itl_sum ?? 0) - (prev.itl_sum ?? 0)) / di) * 1000 : NaN);
+      out.ucmLoadBw.push(prev ? Math.max(0, ((f.ucm_cache_load ?? 0) - (prev.ucm_cache_load ?? 0)) / dt / 1e9) : 0);
+      out.ucmDumpBw.push(prev ? Math.max(0, ((f.ucm_cache_dump ?? 0) - (prev.ucm_cache_dump ?? 0)) / dt / 1e9) : 0);
+      const dpq = prev ? (f.posix_q_blk ?? 0) - (prev.posix_q_blk ?? 0) : 0;
+      const dph = prev ? (f.posix_hit_blk ?? 0) - (prev.posix_hit_blk ?? 0) : 0;
+      out.posixRate.push(dpq > 0 ? (dph / dpq) * 100 : NaN);
+      prev = f; prevTs = ts;
     }
-    const clean = (a: number[]) => a.map((v) => (Number.isFinite(v) ? v : 0));
-    return { hbm: clean(hbm), ext: clean(ext), comp: clean(comp),
-             run: clean(run), wait: clean(wait), swap: clean(swap), kv: clean(kv),
-             genRate: clean(genRate), promptRate: clean(promptRate),
-             ttftT: clean(ttftT), tpotT: clean(tpotT),
-             ucmLoadBw: clean(ucmLoadBw), ucmDumpBw: clean(ucmDumpBw),
-             posixRate: clean(posixRate) };
-  }, [samples]);
+    return out;
+  }, [scopedFlats]);
 
-  // time-axis labels: grid index 0..4 -> sample timestamp (5s cadence => real clock)
-  const timeX = (i: number, n: number) => {
-    const di = n > 1 ? Math.round((i * (samples.length - 1)) / 4) : 0;
-    const ts = samples[di]?.ts;
-    return ts ? new Date(ts * 1000).toLocaleTimeString("zh-CN", { hour12: false }) : "";
-  };
-
-  const latest = samples[samples.length - 1]?.flat ?? {};
-  const genThr = samples.length > 1 ? genRateOf(samples) : 0;
-  function genRateOf(sams: { ts: number; flat: Record<string, number> }[]) {
-    if (sams.length < 2) return 0;
-    const a = sams[sams.length - 2], b = sams[sams.length - 1];
-    const dt = b.ts - a.ts;
-    return dt > 0 ? Math.max(0, (b.flat.gen_tok - a.flat.gen_tok) / dt) : 0;
-  }
+  const latest = flats[flats.length - 1]?.f ?? {};
   const agg = phaseRate?.agg ?? {};
-  const ttft = latest.ttft_cnt ? (latest.ttft_sum / latest.ttft_cnt) * 1000 : (detail ? (detail.rounds ?? []).filter((r: any) => r.phase === "full").at(-1)?.metrics?.ttft_avg_ms ?? 0 : 0);
+  const hasAgg = phaseRate != null && (agg.hbm_queries > 0 || agg.ext_queries > 0 || agg.hbm_hits > 0);
+  const ttft = latest.ttft_cnt
+    ? (latest.ttft_sum / latest.ttft_cnt) * 1000
+    : (detail ? (detail.rounds ?? []).filter((r: any) => r.phase === "full").at(-1)?.metrics?.ttft_avg_ms : 0) ?? 0;
+  const genThr = flats.length > 1
+    ? (() => {
+      const a = flats[flats.length - 2], b = flats[flats.length - 1];
+      const dt = b.ts - a.ts;
+      return dt > 0 ? Math.max(0, ((b.f.gen_tok ?? 0) - (a.f.gen_tok ?? 0)) / dt) : 0;
+    })() : 0;
 
-  // UCM hit breakdown (token 口径, 参考 grafana_vllm "Prefix Cache Query
-  // Breakdown"); vLLM-only fallback: 阶段快照命中率构成. Zero-guard: no data
-  // -> no donut (之前 0 分母退化成 100%).
+  /* 理论命中率（C4 参照基准） */
+  const cfgEff = detail?.config?.rounds?.[0] ?? detail?.config ?? {};
+  const theoretical = Number(parseFloat(String(cfgEff.repeat_rate ?? "0")) || 0) *
+    (1 - 3 / Math.max(1, +(cfgEff.input_len ?? 2048) || 1));
+  const hbmPct = (agg.hbm_hit_rate ?? 0) * 100;
+  const extPct = (agg.ext_hit_rate ?? 0) * 100;
+  const compPct = (extPct / 100 * (1 - hbmPct / 100) + hbmPct / 100) * 100;
+
+  /* 阶段边界事件（C2）+ reset 打点 */
+  const boundaryEvents = useMemo(() => {
+    if (scope) {
+      return events.filter((e) => e.ts >= scope.from && e.ts <= scope.to).flatMap((e) => {
+        if (e.type === "status" && e.phase && e.round) {
+          return [{ x: e.ts, label: `R${e.round}·${e.phase === "warmup" ? "预埋" : "全量"}` }];
+        }
+        if (e.type === "cache_reset") return [{ x: e.ts, label: "⟳", color: "var(--warn)" }];
+        return [];
+      });
+    }
+    const seen = new Set<string>();
+    return events.flatMap((e) => {
+      if (e.type === "status" && e.phase && e.round) {
+        const k = `${e.round}-${e.phase}`;
+        if (seen.has(k)) return [];
+        seen.add(k);
+        return [{ x: e.ts, label: `R${e.round}·${e.phase === "warmup" ? "预埋" : "全量"}` }];
+      }
+      if (e.type === "cache_reset") return [{ x: e.ts, label: "⟳", color: "var(--warn)" }];
+      return [];
+    });
+  }, [events, scope]);
+
+  const roundBands = useMemo(() => {
+    if (!roundsBounds.length) return [];
+    return roundsBounds.map((r, i) => ({
+      from: r.start, to: i + 1 < roundsBounds.length ? roundsBounds[i + 1].start : Infinity,
+      label: `R${r.round}`,
+    })).filter((b) => Number.isFinite(b.from));
+  }, [roundsBounds]);
+
+  /* Breakdown（U5.5：中心 = 综合命中率） */
   const qTok = latest.ucm_q_tok ?? 0;
   const hTok = latest.ucm_hbm_tok ?? 0;
   const uTok = latest.ucm_hit_tok ?? 0;
-  const hbmPct = (agg.hbm_hit_rate ?? 0) * 100;
-  const extPct = (agg.ext_hit_rate ?? 0) * 100;
   const ucmTokens = ucm === true && qTok > 0;
+  const donutReady = ucmTokens ? true : hasAgg;
+  const donutCenter = ucmTokens
+    ? `${((hTok + uTok) / qTok * 100).toFixed(1)}%`
+    : hasAgg ? `${compPct.toFixed(1)}%` : "—";
   const donutItems = ucmTokens
     ? [
-        { v: +((hTok / qTok) * 100).toFixed(1), c: HBM },
-        { v: +((uTok / qTok) * 100).toFixed(1), c: UCMC },
-        { v: +(Math.max(0, qTok - hTok - uTok) / qTok * 100).toFixed(1), c: "#5a5e66" },
+        { v: +(hTok / qTok * 100).toFixed(1), c: HBM },
+        { v: +(uTok / qTok * 100).toFixed(1), c: UCMC },
+        { v: +(Math.max(0, qTok - hTok - uTok) / qTok * 100).toFixed(1), c: MISS },
       ]
     : [
         { v: +hbmPct.toFixed(1), c: HBM },
-        { v: +extPct.toFixed(1), c: UCMC },
-        { v: +Math.max(0, 100 - hbmPct - extPct).toFixed(1), c: "#5a5e66" },
+        { v: +extPct.toFixed(1), c: EXT },
+        { v: +Math.max(0, 100 - hbmPct - extPct).toFixed(1), c: MISS },
       ];
-  const donutReady = ucmTokens ? qTok > 0 : phaseRate != null;
 
-  const shownLogs = logs.filter((l) =>
-    filter === "all" ? true : filter === "warn" ? l.warn || l.err : l.err);
+  /* 日志视图（C5：过滤 + 搜索 + 折叠进度行） */
+  const shownLogs = useMemo(() => {
+    let arr = logTab === "stderr"
+      ? stderrLines.map((l) => ({ line: l, err: /ERROR|PYI-/.test(l), warn: l.includes("WARN") }))
+      : logs;
+    if (filter === "warn") arr = arr.filter((l) => l.warn || l.err);
+    if (filter === "err") arr = arr.filter((l) => l.err);
+    if (search.trim()) {
+      const re = new RegExp(search.trim(), "i");
+      arr = arr.filter((l) => re.test(l.line));
+    }
+    if (collapseProg && logTab === "stdout") {
+      arr = arr.filter((l) => !PROGRESS_RE.test(l.line));
+    }
+    return arr;
+  }, [logs, stderrLines, logTab, filter, search, collapseProg]);
+  const collapsedCount = useMemo(
+    () => (collapseProg && logTab === "stdout" ? logs.filter((l) => PROGRESS_RE.test(l.line)).length : 0),
+    [logs, collapseProg, logTab]);
 
-  const card = (t: React.ReactNode, v: React.ReactNode, s: string, barColor?: string, pct?: number) => (
+  /* 指标端点不可达灰态（§8） */
+  const noData = flats.length === 0;
+  const running = status === "running" || status === "pending";
+  const endpointOffline = noData && running && detail &&
+    (now - (detail.created_at ?? now)) > 20;
+
+  const duration = detail ? ((detail.finished_at ?? now) - detail.created_at) : 0;
+  const interruptedNote = status === "interrupted"
+    ? detail?.finished_at ? `中断于 ${new Date(detail.finished_at * 1000).toLocaleTimeString("zh-CN", { hour12: false })}（应用重启对账标记）` : "应用中途中断"
+    : "";
+
+  const exportCsv = (name: string, headers: string[], rows: (string | number)[][]) => {
+    downloadTextFile(`${runId}_${name}.csv`, toCsv(headers, rows));
+    track("chart_export", { run_id: runId, chart: name });
+  };
+
+  const csvOf = (name: string, series: { key: string; label: string }[]) => {
+    const headers = ["time", ...series.map((s) => s.label)];
+    const rows = scopedFlats.map((s) => [
+      new Date(s.ts * 1000).toLocaleTimeString("zh-CN", { hour12: false }),
+      ...series.map((x) => {
+        const v = (trend as any)[x.key]?.[scopedFlats.indexOf(s)] ?? (s.f as any)[x.key];
+        return Number.isFinite(v) ? Math.round(v * 100) / 100 : "";
+      }),
+    ]);
+    exportCsv(name, headers, rows);
+    toast({ msg: `已导出 ${name} 时序 CSV`, kind: "success" });
+  };
+
+  const card = (t: React.ReactNode, v: React.ReactNode, s: React.ReactNode, barColor?: string, pct?: number) => (
     <div className="mcard">
       <div className="t">{t}</div>
       <div className="v">{v}</div>
       <div className="s">{s}</div>
       {barColor && <div className="bar" style={{ background: barColor, width: `${Math.min(100, pct ?? 0)}%` }} />}
     </div>);
+
+  const roundChips = [{ r: "all" as const, label: "全部轮次" }, ...roundsBounds.map((b) => ({ r: b.round, label: `R${b.round}` }))];
 
   return (
     <>
@@ -246,21 +426,53 @@ export default function MonitorPage({ route }: { route: string }) {
               <span>✕</span><div>无法加载该运行记录（可能已被删除，或 Sidecar 离线）。</div>
             </div>
           )}
+          {status === "reconnecting" && (
+            <div className="banner warn" style={{ marginBottom: 12 }}>
+              ⚠ 实时连接中断，正在重连…（恢复后将自动补拉缺失时序）
+            </div>
+          )}
+          {status === "interrupted" && (
+            <div className="banner warn" style={{ marginBottom: 12 }}>
+              ◼ 该运行被中断：{interruptedNote}。已采集数据完整保留于下方图表与导出中。
+            </div>
+          )}
+
+          {/* run 头部（C8：名称/状态/耗时/参数 chips/导出） */}
           <div className="run-head">
-            <span className="pulse" style={{ background: status === "running" ? undefined : "#6d7078", animation: status === "running" ? undefined : "none" }} />
-            <h2>{runId}</h2>
-            <span className="tag">{detail?.name}</span>
-            <span className="tag" style={{ color: status === "failed" ? "var(--danger)" : undefined }}>
-              {STATUS_TEXT[status] ?? status}
-            </span>
+            <StatusBadge status={status} />
+            <h2>{detail?.name ?? runId}</h2>
+            <span className="muted mono" style={{ fontSize: 12 }}>{runId}</span>
             {totalRounds > 0 && <span className="tag gray">第 {round || 1} / {totalRounds} 轮</span>}
-            {status === "running" && (
-              <button className="btn sm danger" style={{ marginLeft: "auto" }}
-                onClick={async () => { await api.post(`/api/runs/${runId}/stop`); toast("已请求停止"); }}>
-                ■ 停止测试
-              </button>
+            <span className="tag gray">{fmtDur(duration)}</span>
+            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+              {status === "running" && (
+                <button className="btn sm danger" onClick={() => setStopOpen(true)}>■ 停止测试</button>
+              )}
+              <a className="btn sm ghost" href={downloadLink(`/api/runs/${runId}/export?format=xlsx`)}>⇓ xlsx</a>
+              <a className="btn sm ghost" href={downloadLink(`/api/runs/${runId}/export?format=html`)} target="_blank" rel="noreferrer">⇱ HTML 报告</a>
+            </div>
+          </div>
+          <div className="run-sub">
+            <div className="param-chips">
+              {cfgEff.model_name && <span className="tag blue">{cfgEff.model_name}</span>}
+              <span className="tag">输入 {Number(cfgEff.input_len ?? 0).toLocaleString()}</span>
+              <span className="tag">输出 {Number(cfgEff.output_len ?? 0).toLocaleString()}</span>
+              <span className="tag">并发 {cfgEff.concurrency ?? "—"}</span>
+              <span className="tag">重复率 {String(cfgEff.repeat_rate ?? "—")}</span>
+              <span className="tag">dp {cfgEff.dp ?? 1}</span>
+              <span className="tag">数据 {cfgEff.data_num ?? "—"} 条</span>
+            </div>
+            {/* 轮次聚焦（C3） */}
+            {roundsBounds.length > 1 && (
+              <div className="seg" role="tablist" aria-label="轮次筛选">
+                {roundChips.map((c) => (
+                  <span key={String(c.r)} className={roundFilter === c.r ? "on" : ""}
+                    onClick={() => setRoundFilter(c.r)}>{c.label}</span>
+                ))}
+              </div>
             )}
           </div>
+
           <div className="phases">
             <div className={`phase ${status !== "running" ? "done" : phase === "warmup" ? "running" : "done"}`}>
               {status !== "running" ? "✓" : phase === "warmup" ? "●" : "✓"} 预埋 warmup（并发 = dp）
@@ -271,208 +483,274 @@ export default function MonitorPage({ route }: { route: string }) {
             </div>
           </div>
 
-          <div className="metric-cards" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
-            {card(<span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: HBM, marginRight: 6 }} />HBM 命中率</span>,
-              `${((agg.hbm_hit_rate ?? 0) * 100).toFixed(1)}%`, "阶段快照差分", HBM, (agg.hbm_hit_rate ?? 0) * 100)}
-            {card(<span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: EXT, marginRight: 6 }} />Ext 命中率</span>,
-              `${((agg.ext_hit_rate ?? 0) * 100).toFixed(1)}%`, "external prefix cache", EXT, (agg.ext_hit_rate ?? 0) * 100)}
-            {card(<span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: UCMC, marginRight: 6 }} />综合命中率</span>,
-              `${(((agg.ext_hit_rate ?? 0) * (1 - (agg.hbm_hit_rate ?? 0)) + (agg.hbm_hit_rate ?? 0)) * 100).toFixed(1)}%`, "ext×(1−hbm)+hbm", UCMC,
-              ((agg.ext_hit_rate ?? 0) * (1 - (agg.hbm_hit_rate ?? 0)) + (agg.hbm_hit_rate ?? 0)) * 100)}
-            {card("KV Cache 利用率", `${((latest.kv_usage ?? 0) * 100).toFixed(0)}%`, "GPU KV 占用", "#e2a336", (latest.kv_usage ?? 0) * 100)}
-            {card("avg TTFT", `${ttft.toFixed(0)}ms`, `P90 前缀缓存探测`)}
-            {card("输出吞吐", `${genThr.toFixed(0)}`, "tok/s（滑动窗）")}
+          {/* KPI 行（§6.2：6 等宽卡；副行给理论值参照 C4；无数据不显假 0） */}
+          <div className="kpi-grid">
+            {card(<span>显存命中（HBM）<InfoTip text="口径：Δhits/Δqueries（阶段快照差分，与原 CLI 工具一致）。指标源 vllm:prefix_cache_hits_total / queries_total。" /></span>,
+              hasAgg ? `${hbmPct.toFixed(1)}%` : "—",
+              hasAgg ? `理论 ≈${(theoretical * 100).toFixed(1)}% · 偏差 ${(hbmPct - theoretical * 100).toFixed(1)}pt` : "等待阶段完成",
+              HBM, hbmPct)}
+            {card(<span>外部缓存命中（Ext）<InfoTip text="口径：Δhits/Δqueries（阶段快照差分）。指标源 vllm:external_prefix_cache_hits_total / queries_total（UCM 场景）。" /></span>,
+              hasAgg ? `${extPct.toFixed(1)}%` : "—",
+              hasAgg ? "external prefix cache" : "等待阶段完成", EXT, extPct)}
+            {card(<span>综合命中率<InfoTip text="口径：ext×(1−hbm)+hbm —— 外部缓存承接 HBM 未命中的部分。" /></span>,
+              hasAgg ? `${compPct.toFixed(1)}%` : "—",
+              hasAgg ? "ext×(1−hbm)+hbm" : "等待阶段完成", UCMC, compPct)}
+            {card("KV Cache 利用率",
+              latest.kv_usage != null ? `${(latest.kv_usage * 100).toFixed(0)}%` : "—",
+              "GPU KV 占用（gauge）", T_ORANGE, (latest.kv_usage ?? 0) * 100)}
+            {card(<span>avg TTFT<InfoTip text="口径：滑动窗 Δsum/Δcount（vllm:time_to_first_token_seconds）。" /></span>,
+              ttft > 0 ? `${ttft.toFixed(0)}ms` : "—", "首 token 平均延迟")}
+            {card("输出吞吐",
+              genThr > 0 ? genThr.toFixed(0) : "—",
+              "tok/s（滑动窗）", T_GREEN, Math.min(100, genThr / 10))}
           </div>
 
-          <div className="monitor-grid">
-            <div className="card">
-              <div className="chart-head"><b>队列深度（running / waiting / swapped）</b>
-                <span className="tag gray" style={{ fontSize: 10 }}>5s 实时采集</span>
+          {/* 图表区：12 列栅格（U5.1 等宽等高 280px；阶段边界 + 轮次分隔带） */}
+          <div className="grid12">
+            <div className="card chart-card g6">
+              <div className="chart-head"><b>队列深度 & KV 利用率</b>
+                <span className="head-note">{flats.length > 1 && samples.some((s) => s.ucm || (s.engines && flatten(s.engines).running > 0)) ? "活动期 1s 采集" : "空闲期按设置间隔"}</span>
                 <div className="legend">
-                  <span><i style={{ background: "#73BF69" }} />running</span>
-                  <span><i style={{ background: "#F2CC0C" }} />waiting</span>
-                  <span><i style={{ background: "#E53935" }} />swapped</span>
+                  <span className="l-solid"><i style={{ background: Q_RUN }} />running</span>
+                  <span className="l-dash"><i style={{ background: Q_WAIT }} />waiting</span>
+                  <span className="l-dot"><i style={{ background: Q_SWAP }} />swapped</span>
+                  <span className="l-dash"><i style={{ background: T_ORANGE }} />KV%</span>
                 </div>
+                <button className="btn sm ghost" onClick={() => csvOf("queue_kv",
+                  [{ key: "run", label: "running" }, { key: "wait", label: "waiting" },
+                   { key: "swap", label: "swapped" }, { key: "kv", label: "kv_usage%" }])}>⇓ CSV</button>
               </div>
-              {samples.length > 1
-                ? <LineChart yMax={Math.max(5, ...trend.run, ...trend.wait, ...trend.swap)} height={180}
-                    fmt={(v) => String(Math.round(v))}
-                    xLabel={timeX}
-                    series={[
-                      { data: trend.run, color: "#73BF69", area: true },
-                      { data: trend.wait, color: "#F2CC0C" },
-                      { data: trend.swap, color: "#E53935" }]} />
-                : <div className="subnote">等待指标采样…</div>}
+              {endpointOffline ? (
+                <div className="chart-empty offline">指标端点不可达 — 请检查采集端点（/metrics）</div>
+              ) : (
+                <TimeSeriesChart height={280} yMax={undefined}
+                  yFmt={(v) => String(Math.round(v))}
+                  rightFmt={(v) => `${Math.round(v)}%`}
+                  events={boundaryEvents} bands={roundBands} emptyHint="等待指标采样…"
+                  ariaLabel="队列深度与KV利用率时序图"
+                  series={[
+                    { name: "running", color: Q_RUN, points: trend.run.map((y, i) => ({ x: trend.ts[i], y })) },
+                    { name: "waiting", color: Q_WAIT, points: trend.wait.map((y, i) => ({ x: trend.ts[i], y })), dash: true },
+                    { name: "swapped", color: Q_SWAP, points: trend.swap.map((y, i) => ({ x: trend.ts[i], y })), dots: true },
+                    { name: "KV%", color: T_ORANGE, axis: "right", dash: true, points: trend.kv.map((y, i) => ({ x: trend.ts[i], y })) },
+                  ]} />
+              )}
             </div>
-            <div className="card">
-              <div className="chart-head"><b>KV Cache 利用率（%）</b>
-                <div className="legend"><span><i style={{ background: "#e2a336" }} />kv_usage</span></div>
-              </div>
-              {samples.length > 1
-                ? <LineChart yMax={100} height={180} fmt={(v) => `${Math.round(v)}%`}
-                    xLabel={timeX}
-                    series={[{ data: trend.kv, color: "#e2a336", area: true }]} />
-                : <div className="subnote">等待指标采样…</div>}
-            </div>
-          </div>
 
-          <div className="monitor-grid">
-            <div className="card">
-              <div className="chart-head"><b>吞吐（tok/s，滑动窗）</b>
+            <div className="card chart-card g6">
+              <div className="chart-head"><b>吞吐（tok/s）</b>
                 <div className="legend">
-                  <span><i style={{ background: "#10a37f" }} />输出</span>
-                  <span><i style={{ background: "#9254de" }} />输入</span>
+                  <span className="l-solid"><i style={{ background: T_GREEN }} />输出</span>
+                  <span className="l-dash"><i style={{ background: T_PURPLE }} />输入</span>
                 </div>
+                <button className="btn sm ghost" onClick={() => csvOf("throughput",
+                  [{ key: "genRate", label: "output_tok_s" }, { key: "promptRate", label: "input_tok_s" }])}>⇓ CSV</button>
               </div>
-              {samples.length > 1
-                ? <LineChart yMax={Math.max(10, ...trend.genRate, ...trend.promptRate)} height={170}
-                    fmt={(v) => String(Math.round(v))}
-                    xLabel={timeX}
-                    series={[
-                      { data: trend.genRate, color: "#10a37f", area: true },
-                      { data: trend.promptRate, color: "#9254de" }]} />
-                : <div className="subnote">等待指标采样…</div>}
+              {endpointOffline ? (
+                <div className="chart-empty offline">指标端点不可达</div>
+              ) : (
+                <TimeSeriesChart height={280} yFmt={(v) => String(Math.round(v))} emptyHint="等待指标采样…"
+                  events={boundaryEvents} bands={roundBands} ariaLabel="吞吐时序图"
+                  series={[
+                    { name: "输出", color: T_GREEN, area: true, points: trend.genRate.map((y, i) => ({ x: trend.ts[i], y })) },
+                    { name: "输入", color: T_PURPLE, points: trend.promptRate.map((y, i) => ({ x: trend.ts[i], y })), dash: true },
+                  ]} />
+              )}
             </div>
-            <div className="card">
+
+            <div className="card chart-card g6">
               <div className="chart-head"><b>延迟趋势（ms，滑动窗均值）</b>
                 <div className="legend">
-                  <span><i style={{ background: "#e2a336" }} />TTFT avg</span>
-                  <span><i style={{ background: "#9254de" }} />TPOT avg</span>
+                  <span className="l-solid"><i style={{ background: T_ORANGE }} />TTFT avg</span>
+                  <span className="l-dash"><i style={{ background: T_PURPLE }} />TPOT avg</span>
                 </div>
+                <button className="btn sm ghost" onClick={() => csvOf("latency",
+                  [{ key: "ttftT", label: "ttft_avg_ms" }, { key: "tpotT", label: "tpot_avg_ms" }])}>⇓ CSV</button>
               </div>
-              {samples.length > 1
-                ? <LineChart yMax={Math.max(10, ...trend.ttftT, ...trend.tpotT)} height={170}
-                    fmt={(v) => String(Math.round(v))}
-                    xLabel={timeX}
-                    series={[
-                      { data: trend.ttftT, color: "#e2a336" },
-                      { data: trend.tpotT, color: "#9254de" }]} />
-                : <div className="subnote">等待指标采样…</div>}
+              {endpointOffline ? (
+                <div className="chart-empty offline">指标端点不可达</div>
+              ) : (
+                <TimeSeriesChart height={280} yFmt={(v) => String(Math.round(v))} emptyHint="等待指标采样…"
+                  events={boundaryEvents} bands={roundBands} ariaLabel="延迟趋势图"
+                  series={[
+                    { name: "TTFT avg", color: T_ORANGE, points: trend.ttftT.map((y, i) => ({ x: trend.ts[i], y })) },
+                    { name: "TPOT avg", color: T_PURPLE, dash: true, points: trend.tpotT.map((y, i) => ({ x: trend.ts[i], y })) },
+                  ]} />
+              )}
             </div>
-          </div>
 
-          <div className="monitor-grid">
-            <div className="card">
-              <div className="chart-head"><b>命中率趋势</b><span className="tag gray" style={{ fontSize: 10 }}>实时 · 滑动窗差分</span>
+            <div className="card chart-card g6">
+              <div className="chart-head"><b>命中率趋势（滑动窗差分）</b>
                 <div className="legend">
-                  <span><i style={{ background: HBM }} />HBM</span>
-                  <span><i style={{ background: EXT }} />External</span>
-                  <span className="dashed" style={{ color: "#b89af1" }}><i />综合</span>
+                  <span className="l-solid"><i style={{ background: HBM }} />HBM</span>
+                  <span className="l-dash"><i style={{ background: EXT }} />Ext</span>
+                  <span className="l-dot"><i style={{ background: "var(--chart-2)" }} />posix 块命中</span>
+                  <span className="l-dash"><i style={{ background: UCMC }} />综合</span>
                 </div>
+                <button className="btn sm ghost" onClick={() => csvOf("hit_rate",
+                  [{ key: "hbm", label: "hbm%" }, { key: "ext", label: "ext%" },
+                   { key: "posixRate", label: "posix_block%" }, { key: "comp", label: "composite%" }])}>⇓ CSV</button>
               </div>
-              {samples.length > 1
-                ? <LineChart series={[
-                    { data: trend.hbm, color: HBM, area: true },
-                    { data: trend.ext, color: EXT },
-                    { data: trend.posixRate, color: "#73BF69" },
-                    { data: trend.comp, color: UCMC, dash: true }]} yMax={100} height={200}
-                    fmt={(v) => `${v}%`} xLabel={timeX} />
-                : <div className="subnote">等待指标采样…</div>}
+              {endpointOffline ? (
+                <div className="chart-empty offline">指标端点不可达</div>
+              ) : (
+                <TimeSeriesChart height={280} yMax={100} yMin={0} yFmt={(v) => `${Math.round(v)}%`}
+                  emptyHint="等待指标采样…" events={boundaryEvents} bands={roundBands} ariaLabel="命中率趋势图"
+                  series={[
+                    { name: "HBM", color: HBM, points: trend.hbm.map((y, i) => ({ x: trend.ts[i], y })) },
+                    { name: "Ext", color: EXT, points: trend.ext.map((y, i) => ({ x: trend.ts[i], y })), dash: true },
+                    { name: "posix", color: "var(--chart-2)", dots: true, points: trend.posixRate.map((y, i) => ({ x: trend.ts[i], y })) },
+                    { name: "综合", color: UCMC, dash: true, points: trend.comp.map((y, i) => ({ x: trend.ts[i], y })) },
+                  ]} />
+              )}
             </div>
-            <div className="card">
-              <div className="chart-head"><b>Prefix Cache Query Breakdown</b>
-                {ucm != null && <span className={`tag ${ucm ? "purple" : "warn"}`} style={{ fontSize: 10 }}>{ucm ? "ucm: 已检测" : "未检测到 ucm:"}</span>}
+
+            {/* Breakdown（§6.2：4 列；中心=综合命中率 U5.5；非 UCM 收起带宽图与横幅） */}
+            <div className="card chart-card g4">
+              <div className="chart-head"><b>前缀缓存查询构成</b>
+                <span className={`tag ${ucm ? "purple" : "gray"}`} style={{ fontSize: 10 }}>
+                  {ucm ? "ucm: 已检测" : "无 ucm: 指标"}</span>
               </div>
-              {ucm === false && (
-                <div className="alert warn" style={{ marginBottom: 10 }}>
-                  <span>⚠</span><div>服务 /metrics 中未发现 ucm: 前缀指标——可能未启用 UCM 或未暴露，仅展示 vLLM 原生指标。</div>
-                </div>)}
-              <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
                 {donutReady ? (
-                  <Donut items={donutItems} caption={ucmTokens ? "query 构成（tokens）" : "命中率构成（阶段快照）"} />
+                  <Donut items={donutItems} center={donutCenter} caption="命中构成" />
                 ) : (
-                  <div className="subnote" style={{ width: 132, textAlign: "center" }}>等待阶段<br />完成…</div>
+                  <div className="subnote" style={{ width: 140, textAlign: "center" }}>等待阶段<br />完成…</div>
                 )}
-                <div style={{ flex: 1 }}>
+                <div style={{ flex: 1, minWidth: 150 }}>
                   {ucmTokens ? (
                     <>
                       <div className="kv"><span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: HBM, marginRight: 7 }} />HBM 命中 tokens</span><b>{Math.round(hTok).toLocaleString()}</b></div>
                       <div className="kv"><span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: UCMC, marginRight: 7 }} />UCM 命中 tokens</span><b>{Math.round(uTok).toLocaleString()}</b></div>
-                      <div className="kv"><span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "#5a5e66", marginRight: 7 }} />Miss tokens</span><b>{Math.round(Math.max(0, qTok - hTok - uTok)).toLocaleString()}</b></div>
+                      <div className="kv"><span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: MISS, marginRight: 7 }} />Miss tokens</span><b>{Math.round(Math.max(0, qTok - hTok - uTok)).toLocaleString()}</b></div>
                       <div className="kv"><span>查询总量 tokens</span><b>{Math.round(qTok).toLocaleString()}</b></div>
                     </>
-                  ) : (
+                  ) : hasAgg ? (
                     <>
                       <div className="kv"><span>HBM 命中率（阶段快照）</span><b>{hbmPct.toFixed(1)}%</b></div>
                       <div className="kv"><span>Ext 命中率（阶段快照）</span><b>{extPct.toFixed(1)}%</b></div>
                     </>
-                  )}
+                  ) : <div className="subnote">暂无构成数据</div>}
                   {latest.posix_cap ? (
                     <div className="kv"><span>Posix 存储占用</span>
-                      <b>{(latest.posix_used / latest.posix_cap * 100).toFixed(1)}%</b></div>
+                      <b>{((latest.posix_used ?? 0) / latest.posix_cap * 100).toFixed(1)}%</b></div>
                   ) : null}
                 </div>
               </div>
-              {samples.length > 1 && (
-                <div style={{ marginTop: 12 }}>
-                  <div className="chart-head"><b>UCM 存储带宽（GB/s）</b>
-                    <div className="legend">
-                      <span><i style={{ background: "#10a37f" }} />写入 dump</span>
-                      <span><i style={{ background: "#13c2c2" }} />读取 load</span>
-                    </div>
-                  </div>
-                  <LineChart yMax={Math.max(0.5, ...trend.ucmLoadBw, ...trend.ucmDumpBw)} height={130}
-                    fmt={(v) => v.toFixed(2)}
-                    series={[
-                      { data: trend.ucmDumpBw, color: "#10a37f", area: true },
-                      { data: trend.ucmLoadBw, color: "#13c2c2" }]} />
+              <details style={{ marginTop: 10 }}>
+                <summary className="subnote" style={{ cursor: "pointer" }}>指标说明</summary>
+                <div className="subnote" style={{ marginTop: 6 }}>
+                  {ucm
+                    ? "构成口径 = ucm: token 级查询（gpu_hbm_hit / ucm_hit / miss）；带宽图见右侧。"
+                    : "服务 /metrics 未发现 ucm: 前缀指标（可能未启用 UCM 或未暴露）。仅展示 vLLM 原生指标；UCM 存储带宽图已隐藏。"}
                 </div>
-              )}
+              </details>
             </div>
-          </div>
 
-          <div className="monitor-grid2">
-            <div className="card">
-              <div className="chart-head">
-                <div className="seg">
-                  {["all", "warn", "err"].map((f) => (
-                    <span key={f} className={filter === f ? "on" : ""}
-                      onClick={() => setFilter(f)}>{f === "all" ? "全部" : f === "warn" ? "WARN" : "ERROR"}</span>
-                  ))}
+            {/* UCM 存储带宽（仅 UCM 时展示，§6.2） */}
+            {ucm === true && (
+              <div className="card chart-card g4">
+                <div className="chart-head"><b>UCM 存储带宽（GB/s）</b>
+                  <div className="legend">
+                    <span className="l-solid"><i style={{ background: T_GREEN }} />写入 dump</span>
+                    <span className="l-dash"><i style={{ background: EXT }} />读取 load</span>
+                  </div>
                 </div>
-                <label style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", fontSize: 11.5, color: "var(--muted)" }}>
-                  <input type="checkbox" defaultChecked onChange={(e) => (followRef.current = e.target.checked)} />跟随滚动
-                </label>
-                <a className="btn sm ghost" href={downloadLink(`/api/runs/${runId}/logs/download?stream=stdout`)}>导出日志</a>
+                <TimeSeriesChart height={190} yFmt={(v) => v.toFixed(1)} emptyHint="等待指标采样…"
+                  events={boundaryEvents} bands={roundBands} ariaLabel="UCM存储带宽图"
+                  series={[
+                    { name: "dump", color: T_GREEN, area: true, points: trend.ucmDumpBw.map((y, i) => ({ x: trend.ts[i], y })) },
+                    { name: "load", color: EXT, points: trend.ucmLoadBw.map((y, i) => ({ x: trend.ts[i], y })) },
+                  ]} />
               </div>
-              <div className="logview" ref={logRef}>
-                {shownLogs.length === 0 && <div className="ln muted">暂无日志…</div>}
-                {shownLogs.slice(-500).map((l, i) => (
-                  <div key={i} className={`ln ${l.err ? "err" : l.warn ? "warn" : ""}`}>{l.line}</div>
-                ))}
-              </div>
-            </div>
-            <div className="card">
-              <div className="chart-head"><b>DP 域明细</b><span className="tag gray" style={{ fontSize: 10 }}>阶段快照差分</span></div>
+            )}
+
+            {/* DP 域明细 */}
+            <div className={`card chart-card ${ucm === true ? "g4" : "g8"}`}>
+              <div className="chart-head"><b>DP 域 / 端点明细</b>
+                <span className="head-note">阶段快照差分口径</span></div>
               <table className="mini-table">
-                <thead><tr><th>端点 / DP 域</th><th>HBM 命中率</th><th>hits / queries</th><th>Ext 命中率</th><th>hits / queries</th></tr></thead>
+                <thead><tr><th>端点 / DP 域</th><th>HBM 命中率</th><th>hits / queries</th><th>Ext 命中率</th></tr></thead>
                 <tbody>
                   {Object.entries(phaseRate?.per_pod ?? {}).map(([key, d]: [string, any]) => (
                     <tr key={key}>
                       <td><b className="mono" style={{ fontSize: 11 }}>{key.replace("|", " · ")}</b></td>
-                      <td><b style={{ color: HBM }}>{(d.hbm_hit_rate * 100).toFixed(1)}%</b></td>
+                      <td><b style={{ color: "var(--hbm)" }}>{(d.hbm_hit_rate * 100).toFixed(1)}%</b></td>
                       <td className="mono">{d.hbm_hits.toLocaleString()} / {d.hbm_queries.toLocaleString()}</td>
-                      <td><b style={{ color: EXT }}>{(d.ext_hit_rate * 100).toFixed(1)}%</b></td>
-                      <td className="mono">{d.ext_hits.toLocaleString()} / {d.ext_queries.toLocaleString()}</td>
+                      <td><b style={{ color: "var(--ext)" }}>{(d.ext_hit_rate * 100).toFixed(1)}%</b></td>
                     </tr>
                   ))}
                   {!Object.keys(phaseRate?.per_pod ?? {}).length &&
                     Object.entries(phaseRate?.per_dp ?? {}).map(([dp, d]: [string, any]) => (
                       <tr key={dp}>
                         <td><b>{dp}</b></td>
-                        <td><b style={{ color: HBM }}>{(d.hbm_hit_rate * 100).toFixed(1)}%</b></td>
+                        <td><b style={{ color: "var(--hbm)" }}>{(d.hbm_hit_rate * 100).toFixed(1)}%</b></td>
                         <td className="mono">{d.hbm_hits.toLocaleString()} / {d.hbm_queries.toLocaleString()}</td>
-                        <td><b style={{ color: EXT }}>{(d.ext_hit_rate * 100).toFixed(1)}%</b></td>
-                        <td className="mono">{d.ext_hits.toLocaleString()} / {d.ext_queries.toLocaleString()}</td>
+                        <td><b style={{ color: "var(--ext)" }}>{(d.ext_hit_rate * 100).toFixed(1)}%</b></td>
                       </tr>))}
                   {!Object.keys(phaseRate?.per_pod ?? {}).length && !Object.keys(phaseRate?.per_dp ?? {}).length && (
-                    <tr><td colSpan={5} className="muted">等待阶段完成…</td></tr>)}
+                    <tr><td colSpan={4} className="muted">等待阶段完成…</td></tr>)}
                 </tbody>
               </table>
+            </div>
+
+            {/* 日志区（U5.6：全宽、可拖拽、搜索、折叠进度行、stderr） */}
+            <div className="card logwrap g12">
+              <div className="log-toolbar">
+                <div className="seg">
+                  {["all", "warn", "err"].map((f) => (
+                    <span key={f} className={filter === f ? "on" : ""}
+                      onClick={() => setFilter(f)}>{f === "all" ? "全部" : f === "warn" ? "WARN" : "ERROR"}</span>
+                  ))}
+                </div>
+                <div className="seg">
+                  <span className={logTab === "stdout" ? "on" : ""} onClick={() => setLogTab("stdout")}>stdout</span>
+                  <span className={logTab === "stderr" ? "on" : ""} onClick={() => setLogTab("stderr")}>stderr</span>
+                </div>
+                <input className="inp" placeholder="搜索关键字…" value={search}
+                  onChange={(e) => setSearch(e.target.value)} aria-label="日志搜索" />
+                <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 11.5, color: "var(--muted)", cursor: "pointer" }}
+                  title={collapsedCount ? `已折叠 ${collapsedCount} 行进度输出` : undefined}>
+                  <input type="checkbox" checked={collapseProg}
+                    onChange={(e) => setCollapseProg(e.target.checked)} />折叠进度行
+                </label>
+                <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 11.5, color: "var(--muted)", cursor: "pointer" }}>
+                  <input type="checkbox" defaultChecked onChange={(e) => (followRef.current = e.target.checked)} />跟随滚动
+                </label>
+                <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                  <a className="btn sm ghost" href={downloadLink(`/api/runs/${runId}/logs/download?stream=stdout`)}>导出 stdout</a>
+                  <a className="btn sm ghost" href={downloadLink(`/api/runs/${runId}/logs/download?stream=stderr`)}>导出 stderr</a>
+                </div>
+              </div>
+              <div className="log-resize" role="separator" aria-orientation="horizontal" aria-label="拖拽调整日志区高度"
+                onMouseDown={(e) => { resizeRef.current = { startY: e.clientY, startH: logH }; }}
+                title="拖拽调整高度（240–600px）" />
+              <div className="logview" ref={logRef} style={{ height: logH - 46 }}>
+                {shownLogs.length === 0 && <div className="ln muted">暂无日志…</div>}
+                {shownLogs.slice(-800).map((l, i) => (
+                  <div key={i} className={`ln ${l.err ? "err" : l.warn ? "warn" : ""}`}>{l.line}</div>
+                ))}
+                {collapseProg && logTab === "stdout" && collapsedCount > 0 && (
+                  <div className="ln collapse-bar">已折叠 {collapsedCount} 行进度输出（tqdm / Calculating / POST=…）— 取消勾选「折叠进度行」可展开</div>
+                )}
+              </div>
             </div>
           </div>
         </>
       )}
+
+      {/* 停止确认（C7） */}
+      <ConfirmModal open={stopOpen} title="停止测试" danger
+        message="停止将丢弃未完成的轮次，已完成轮次的数据保留。确认停止？"
+        confirmText="停止测试"
+        onCancel={() => setStopOpen(false)}
+        onConfirm={async () => {
+          setStopOpen(false);
+          try {
+            await api.post(`/api/runs/${runId}/stop`);
+            toast("已请求停止");
+          } catch (e: any) { toast({ msg: `停止失败：${e.message}`, kind: "error" }); }
+        }} />
     </>
   );
 }
