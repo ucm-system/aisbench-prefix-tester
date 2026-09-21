@@ -134,7 +134,9 @@ class SlaTuner(threading.Thread):
         cfg["test_name"] = f"sla-c{concurrency}"
         if self.dataset_files:
             cfg["dataset_files"] = self.dataset_files
-        cfg.pop("rounds", None)
+        # single-round probe: keep an explicit rounds marker so the stored
+        # config is self-explanatory in the detail view (not "empty")
+        cfg["rounds"] = [{}]
         run_id = store.create_run(cfg, name=(f"SLA c={concurrency}"
                                              + (f" · {self.base_cfg.get('test_name')}"
                                                 if self.base_cfg.get('test_name') else "")),

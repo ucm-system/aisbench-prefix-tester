@@ -35,9 +35,48 @@ def export_xlsx(run_ids: list[str], exclude_warmup: bool = True,
             width = max((len(str(c.value or "")) for c in col), default=8)
             ws.column_dimensions[get_column_letter(col[0].column)].width = min(42, width + 4)
 
-    # Sheet 1: 汇总对比
-    ws = wb.active
-    ws.title = "汇总对比"
+    # Sheet 1: 明细数据 — every (run, round, phase) row with the full parameter
+    # set and all metrics (mirrors the original tool's flat CSV: cc/max_cc/
+    # measured input/output len/TTFT/TPOT/E2EL/throughputs per row)
+    ws0 = wb.active
+    ws0.title = "明细数据"
+    param_keys = ["input_len", "output_len", "data_num", "prefix_num", "repeat_rate",
+                  "concurrency", "request_rate", "max_concurrency", "dp", "seed",
+                  "model_name", "model_path", "host_ip", "host_port", "test_type",
+                  "total_requests", "total_input_tokens", "total_output_tokens"]
+    hit_keys = ["HBM命中率", "HBM queries", "HBM hits", "Ext命中率", "Ext queries", "Ext hits"]
+    detail_rows = []
+    for rid in result["runs"]:
+        for r in store.get_rounds(rid):
+            p = r.get("params") or {}
+            m = r.get("metrics") or {}
+            h = (r.get("hit_rate") or {}).get("aggregated", {})
+            row = {"run": result["names"][rid], "run_id": rid,
+                   "轮": r["round_index"], "阶段": r["phase"],
+                   "警告": r.get("warnings", "")}
+            row.update({k: p.get(k) for k in param_keys})
+            row.update({"HBM命中率": h.get("hbm_hit_rate"),
+                        "HBM queries": h.get("hbm_queries"), "HBM hits": h.get("hbm_hits"),
+                        "Ext命中率": h.get("ext_hit_rate"),
+                        "Ext queries": h.get("ext_queries"), "Ext hits": h.get("ext_hits")})
+            for k, v in m.items():
+                if k != "request_rate" and k not in row:
+                    row[k] = v
+            detail_rows.append(row)
+    fixed = (["run", "run_id", "轮", "阶段", "警告"] + param_keys + hit_keys)
+    rest: list[str] = []
+    for row in detail_rows:
+        for k in row:
+            if k not in fixed and k not in rest:
+                rest.append(k)
+    ws0.append(fixed + rest)
+    for row in detail_rows:
+        ws0.append([row.get(k, "") for k in fixed + rest])
+    style_header(ws0)
+    auto_width(ws0)
+
+    # Sheet 2: 汇总对比
+    ws = wb.create_sheet("汇总对比")
     keys = list(compare_mod.METRICS.keys())
     ws.append(["指标"] + [result["names"][rid] for rid in result["runs"]])
     for key in keys:

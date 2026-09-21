@@ -322,7 +322,14 @@ async def runs_create(body: RunCreateReq, authorization: str = Header(default=""
     errors = validate_config(body.config)
     if errors["errors"]:
         raise HTTPException(status_code=400, detail=errors["errors"])
-    run_id = store.create_run(body.config, body.name)
+    # store the effective per-round config (defaults merged into every round)
+    # so detail views / exports are self-describing instead of empty overrides
+    cfg = dict(body.config)
+    base = {k: v for k, v in cfg.items() if k != "rounds"}
+    if isinstance(cfg.get("rounds"), list):
+        cfg["rounds"] = [{**base, **ov} if isinstance(ov, dict) else ov
+                         for ov in cfg["rounds"]]
+    run_id = store.create_run(cfg, body.name)
     runner.start_run(run_id, asyncio.get_running_loop())
     return {"run_id": run_id}
 
@@ -386,6 +393,13 @@ async def run_detail(run_id: str, authorization: str = Header(default="")):
     if not run:
         raise HTTPException(status_code=404, detail="run not found")
     run["rounds"] = store.get_rounds(run_id)
+    # expand empty per-round overrides into the effective config so the detail
+    # view is self-describing (rounds: [{},{}] -> full values per round)
+    cfg = run.get("config") or {}
+    base = {k: v for k, v in cfg.items() if k != "rounds"}
+    if isinstance(cfg.get("rounds"), list):
+        cfg["rounds"] = [{**base, **ov} if isinstance(ov, dict) else ov
+                         for ov in cfg["rounds"]]
     return run
 
 

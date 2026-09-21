@@ -161,12 +161,14 @@ export default function HistoryPage() {
           <div className="card" style={{ padding: 12, marginBottom: 12 }}>
             <div className="chart-head" style={{ marginBottom: 4 }}><b style={{ fontSize: 12 }}>轮 × 阶段结果</b></div>
             <table className="mini-table">
-              <thead><tr><th>轮</th><th>阶段</th><th>HBM</th><th>Ext</th><th>TTFT avg</th><th>吞吐</th><th>时长</th><th>警告</th></tr></thead>
+              <thead><tr><th>轮</th><th>阶段</th><th>输入/输出</th><th>并发</th><th>HBM</th><th>Ext</th><th>TTFT avg</th><th>吞吐</th><th>时长</th><th>警告</th></tr></thead>
               <tbody>
                 {(detail?.rounds ?? []).map((r: any, i: number) => (
                   <tr key={i}>
                     <td>R{r.round_index}</td>
                     <td><span className={`tag ${r.phase === "full" ? "blue" : "gray"}`} style={{ padding: "1px 7px" }}>{r.phase}</span></td>
+                    <td className="mono" style={{ fontSize: 11 }}>{r.params?.input_len ?? "—"}/{r.params?.output_len ?? "—"}</td>
+                    <td>{r.params?.concurrency ?? "—"}</td>
                     <td><b>{((r.hit_rate?.aggregated?.hbm_hit_rate ?? 0) * 100).toFixed(1)}%</b></td>
                     <td style={{ color: "var(--ext)" }}>{((r.hit_rate?.aggregated?.ext_hit_rate ?? 0) * 100).toFixed(1)}%</td>
                     <td>{r.metrics?.ttft_avg_ms > 0 ? `${r.metrics.ttft_avg_ms.toFixed(0)}ms` : "—"}</td>
@@ -175,7 +177,7 @@ export default function HistoryPage() {
                     <td className="muted" style={{ fontSize: 11 }}>{r.warnings || "—"}</td>
                   </tr>
                 ))}
-                {!(detail?.rounds ?? []).length && <tr><td colSpan={8} className="muted">暂无阶段数据</td></tr>}
+                {!(detail?.rounds ?? []).length && <tr><td colSpan={10} className="muted">暂无阶段数据</td></tr>}
               </tbody>
             </table>
           </div>

@@ -194,6 +194,7 @@ usage-bar{display:block}
 
 /* React app additions */
 .banner{display:flex;align-items:center;gap:12px;background:rgba(229,72,77,.1);border:1px solid rgba(229,72,77,.4);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12.5px}
+.banner.info{background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.35);color:#9ec1ff}
 a{color:var(--brand)}
 
 /* React mount point is the flex row container (body > #root > sidebar+main) */
@@ -253,6 +254,7 @@ a{color:var(--brand)}
 :root[data-theme="light"] .tag.purple{color:#7c3aed}
 :root[data-theme="light"] .tag.warn{color:#9a6700}
 :root[data-theme="light"] .alert.info{color:#1d4ed8}
+:root[data-theme="light"] .banner.info{color:#1d4ed8}
 :root[data-theme="light"] .alert.warn{color:#9a6700}
 :root[data-theme="light"] .alert.error{color:#c02b2b}
 :root[data-theme="light"] .phase.running{color:#1d4ed8}

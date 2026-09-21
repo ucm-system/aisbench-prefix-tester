@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { api, restartSidecar } from "../api";
+import { api, restartSidecar, useConnected } from "../api";
 import { useToast } from "../App";
 
 export default function SettingsPage() {
   const toast = useToast();
+  const connected = useConnected();
   const [items, setItems] = useState<{ ok: boolean; name: string; detail: string; hint: string }[]>([]);
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [theme, setTheme] = useState(localStorage.getItem("pt-theme") || "auto");
@@ -16,7 +17,9 @@ export default function SettingsPage() {
     api.get<{ runtime?: string }>("/api/health")
       .then((h) => setRuntime((h.runtime as any) ?? "")).catch(() => {});
   };
-  useEffect(load, []);
+  useEffect(() => {
+    if (connected) load();
+  }, [connected]);
 
   const set = (k: string, v: string) => {
     setSettings((s) => ({ ...s, [k]: v }));

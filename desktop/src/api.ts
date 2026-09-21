@@ -1,7 +1,8 @@
 /* Sidecar REST/WS client. Connection discovery:
  *  - Electron: window.sidecarBridge.getInfo() (IPC, main process owns lifecycle)
- *  - Browser dev: GET /dev-sidecar-info served by the vite plugin
+ *  - dev: GET /dev-sidecar-info served by the vite plugin
  */
+import { useEffect, useState } from "react";
 export type Conn = { port: number; token: string };
 
 declare global {
@@ -96,6 +97,18 @@ export const api = {
   patch: <T>(p: string, body: unknown) => req<T>(p, "PATCH", body),
   del: <T>(p: string) => req<T>(p, "DELETE"),
 };
+
+/** Reactive connection state: false while the self-contained environment is
+ * still starting, true once the sidecar is reachable. Pages re-run their
+ * initial loads when this flips true. */
+export function useConnected(): boolean {
+  const [connected, setConnected] = useState(connStatus.connected);
+  useEffect(() => {
+    const t = setInterval(() => setConnected(connStatus.connected), 800);
+    return () => clearInterval(t);
+  }, []);
+  return connected;
+}
 
 export function wsRun(runId: string): WebSocket {
   if (sameOrigin) {

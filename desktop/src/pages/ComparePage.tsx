@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, downloadLink, type CompareResult, type RunSummary } from "../api";
+import { api, downloadLink, useConnected, type CompareResult, type RunSummary } from "../api";
 import { BarChart, LineChart, Radar } from "../charts";
 import { useToast } from "../App";
 
@@ -7,6 +7,7 @@ const COLORS = ["#4f8bff", "#13c2c2", "#9254de", "#e2a336", "#10a37f", "#e5484d"
 
 export default function ComparePage() {
   const toast = useToast();
+  const connected = useConnected();
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [sel, setSel] = useState<string[]>([]);
   const [excludeWarmup, setExcludeWarmup] = useState(true);
@@ -14,6 +15,7 @@ export default function ComparePage() {
   const [result, setResult] = useState<CompareResult | null>(null);
 
   useEffect(() => {
+    if (!connected) return;
     api.get<RunSummary[]>("/api/runs").then((rs) => {
       // SLA probe runs live on the SLA page; keep the compare picker manual-only
       const manual = rs.filter((r) => r.kind !== "sla");
@@ -29,7 +31,7 @@ export default function ComparePage() {
       }
       setSel((prev) => prev.length ? prev : manual.filter((r) => r.status === "completed").slice(0, 2).map((r) => r.run_id));
     }).catch(() => {});
-  }, []);
+  }, [connected]);
 
   // keep the preselect recoverable across F5 (HistoryPage jump overwrites it)
   useEffect(() => {

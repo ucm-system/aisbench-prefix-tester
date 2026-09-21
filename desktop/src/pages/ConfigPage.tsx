@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "../api";
+import { api, useConnected } from "../api";
 import { navigate, useToast } from "../App";
 
 type Tok = { name: string; path: string; source: string };
@@ -35,13 +35,15 @@ export default function ConfigPage() {
   const [probe, setProbe] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const connected = useConnected();
   useEffect(() => {
+    if (!connected) return;
     api.get<Tok[]>("/api/tokenizers").then((t) => {
       setTokenizers(t);
       setCfg((c) => ({ ...c, tokenizer: c.tokenizer || t[0]?.name || "" }));
     }).catch(() => {});
     api.get<any[]>("/api/datasets").then(setDatasets).catch(() => {});
-  }, []);
+  }, [connected]);
 
   const set = (patch: Partial<typeof cfg>) => setCfg((c) => ({ ...c, ...patch }));
 

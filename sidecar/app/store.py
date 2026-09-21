@@ -71,6 +71,10 @@ def _migrate(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE runs ADD COLUMN kind TEXT DEFAULT 'manual'")
         # backfill: pre-kind SLA probe runs are named "SLA c=<n> · ..."
         con.execute("UPDATE runs SET kind='sla' WHERE kind='manual' AND name LIKE 'SLA c=%'")
+    # backfill: SLA probe runs whose stored config lost the rounds marker
+    con.execute(
+        "UPDATE runs SET config_json = json_set(config_json, '$.rounds', json('[{}]'))"
+        " WHERE kind='sla' AND config_json NOT LIKE '%\"rounds\"%'")
 
 
 def _row_to_dict(row: sqlite3.Row | None) -> dict | None:

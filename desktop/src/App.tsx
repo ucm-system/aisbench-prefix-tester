@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { api, connStatus, initConnection, onSidecarExited, restartSidecar } from "./api";
+import { api, initConnection, onSidecarExited, restartSidecar, useConnected } from "./api";
 import ConfigPage from "./pages/ConfigPage";
 import MonitorPage from "./pages/MonitorPage";
 import HistoryPage from "./pages/HistoryPage";
@@ -28,8 +28,8 @@ export default function App() {
   const [route, setRoute] = useState(location.hash.replace(/^#\/?/, "") || "config");
   const [toastMsg, setToastMsg] = useState("");
   const [sidecarDown, setSidecarDown] = useState(false);
-  const [ready, setReady] = useState(false);
   const [activeRun, setActiveRun] = useState<{ run_id: string; name: string } | null>(null);
+  const connected = useConnected();
 
   useEffect(() => {
     const onHash = () => setRoute(location.hash.replace(/^#\/?/, "") || "config");
@@ -49,16 +49,15 @@ export default function App() {
     else document.documentElement.dataset.theme = saved;
   }, []);
   useEffect(() => {
-    (async () => {
-      await initConnection();
-      setReady(true);
-    })();
+    // fire-and-forget: resolves once the self-contained environment is ready;
+    // the UI shell renders immediately and pages fill in as data arrives
+    initConnection();
     onSidecarExited(() => setSidecarDown(true));
   }, []);
 
   // global "a run is active" indicator → jump back into the live monitor view
   useEffect(() => {
-    if (!ready) return;
+    if (!connected) return;
     const tick = async () => {
       try {
         const r = await api.get<{ run: { run_id: string; name: string } | null }>("/api/runs/active");
@@ -68,7 +67,7 @@ export default function App() {
     tick();
     const t = setInterval(tick, 5000);
     return () => clearInterval(t);
-  }, [ready]);
+  }, [connected]);
 
   const toastTimer = useRef<number | null>(null);
   const toast = useCallback<Toast>((msg) => {
@@ -108,8 +107,8 @@ export default function App() {
         </nav>
         <div className="side-foot">
           Sidecar{" "}
-          <span className={connStatus.connected ? "ok" : ""}>
-            {connStatus.connected ? "● 已连接" : "○ 未连接"}
+          <span className={connected ? "ok" : ""}>
+            {connected ? "● 已连接" : "○ 启动中"}
           </span>
           <br />
           前缀复用测试器 v0.1.0
@@ -129,8 +128,8 @@ export default function App() {
               </span>
             )}
             <span className="chip">
-              <span className="dot" style={{ background: connStatus.connected ? undefined : "#e5484d" }} />
-              {connStatus.connected ? "Sidecar 就绪" : "Sidecar 离线"}
+              <span className="dot" style={{ background: connected ? undefined : "#e5484d" }} />
+              {connected ? "Sidecar 就绪" : "Sidecar 启动中"}
             </span>
           </div>
         </header>
@@ -148,24 +147,19 @@ export default function App() {
               </button>
             </div>
           )}
-          {!ready && (
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "70vh", gap: 16 }}>
-              <div style={{ width: 56, height: 56, borderRadius: 16, background: "linear-gradient(135deg,#2b7fff,#13c2c2)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 800, fontSize: 22 }}>PC</div>
-              <div style={{ fontSize: 15, fontWeight: 600 }}>正在启动运行环境…</div>
-              <div style={{ color: "var(--muted)", fontSize: 12 }}>自包含模式：预热内置 Python / ais_bench 后自动进入，无需任何操作</div>
-              <div className="progress" style={{ width: 280 }}><i style={{ width: "45%" }} /></div>
+          {!connected && !sidecarDown && (
+            <div className="banner info">
+              ⏳ 运行环境启动中（自包含预热约 30-60 秒）— 页面可先浏览，数据就绪后自动加载
             </div>
           )}
-          {ready && (
-            <>
-              {pageKey === "config" && <ConfigPage />}
-              {pageKey === "monitor" && <MonitorPage route={route} />}
-              {pageKey === "history" && <HistoryPage />}
-              {pageKey === "compare" && <ComparePage />}
-              {pageKey === "settings" && <SettingsPage />}
-              {pageKey === "sla" && <SlaPage />}
-            </>
-          )}
+          <>
+            {pageKey === "config" && <ConfigPage />}
+            {pageKey === "monitor" && <MonitorPage route={route} />}
+            {pageKey === "history" && <HistoryPage />}
+            {pageKey === "compare" && <ComparePage />}
+            {pageKey === "settings" && <SettingsPage />}
+            {pageKey === "sla" && <SlaPage />}
+          </>
         </div>
       </div>
       <div id="toast" style={{

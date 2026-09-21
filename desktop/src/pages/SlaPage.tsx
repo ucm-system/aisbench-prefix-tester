@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type RunSummary, type SlaJob } from "../api";
+import { api, useConnected, type RunSummary, type SlaJob } from "../api";
 import { BarChart } from "../charts";
 import { useToast } from "../App";
 
@@ -44,8 +44,11 @@ export default function SlaPage() {
   };
 
   // restore: live in-process job first, else the most recent persisted job —
-  // navigating away and back (or an app restart) no longer loses the view
+  // navigating away and back (or an app restart) no longer loses the view.
+  // Retries until the sidecar is reachable (UI may open before it is ready).
+  const connected = useConnected();
   useEffect(() => {
+    if (!connected) return;
     api.get<{ job: Job | null }>("/api/sla/current").then((r) => {
       if (r.job) setJob(r.job);
     }).catch(() => {
@@ -53,14 +56,15 @@ export default function SlaPage() {
       if (id) api.get<Job>(`/api/sla/${id}`).then(setJob).catch(() => {});
     });
     loadHistory();
-  }, []);
+  }, [connected]);
 
   useEffect(() => {
+    if (!connected) return;
     api.get<{ name: string }[]>("/api/tokenizers").then((t) => {
       setToks(t);
-      setForm((f) => ({ ...f, tokenizer: t[0]?.name ?? "" }));
+      setForm((f) => ({ ...f, tokenizer: f.tokenizer || (t[0]?.name ?? "") }));
     }).catch(() => {});
-  }, []);
+  }, [connected]);
 
   useEffect(() => {
     if (!job || !ACTIVE_STATES.includes(job.state)) return;
