@@ -15,9 +15,26 @@ _ab_configs = os.path.join(_ab_pkg, 'benchmark', 'configs')
 if not os.path.isdir(_ab_configs):
     raise SystemExit(f'ais_bench configs dir not found: {_ab_configs}')
 
-# bundled tokenizer assets (../assets/model/<name>/...) if present
+# bundled tokenizer assets (../assets/model/<name>/...) if present.
+# Curated per-directory bundling:
+#   - DeepSeek* EXCLUDED: its LlamaTokenizer loads fine but encodes Chinese to
+#     ZERO ids on the bundled transformers 5.17.x (upstream bug; 4.57.x works).
+#     Shipping it would silently corrupt datasets — see tokenizer_mgr.verify.
+#   - root smoke evidence (smoke_*.jsonl) stays out; manifest/README ship.
 _asset_model = os.path.join('..', 'assets', 'model')
-_asset_datas = [(_asset_model, 'assets/model')] if os.path.isdir(_asset_model) else []
+_asset_datas = []
+if os.path.isdir(_asset_model):
+    for _name in sorted(os.listdir(_asset_model)):
+        _sub = os.path.join(_asset_model, _name)
+        if not os.path.isdir(_sub):
+            continue
+        if _name.startswith('DeepSeek'):
+            continue
+        _asset_datas.append((_sub, os.path.join('assets', 'model', _name)))
+    for _rootfile in ('manifest.json', 'README.md'):
+        _rf = os.path.join(_asset_model, _rootfile)
+        if os.path.isfile(_rf):
+            _asset_datas.append((_rf, os.path.join('assets', 'model', _rootfile)))
 
 a = Analysis(
     ['run_sidecar.py'],
@@ -36,6 +53,12 @@ a = Analysis(
         'anyio._backends._asyncio',
         'multidict', 'frozenlist',
         'ais_bench.benchmark.tasks.custom_tasks',
+        # tokenizer assets that rely on lazy/optional loaders:
+        # glm-4-9b-chat (ChatGLM4Tokenizer -> sentencepiece) and Kimi
+        # (TikTokenTokenizer -> tiktoken, whose encoding registry is a
+        # namespace-plugin PyInstaller cannot see)
+        'sentencepiece',
+        'tiktoken', 'tiktoken_ext', 'tiktoken_ext.openai_public',
     ],
     excludes=['matplotlib', 'tkinter', 'polars', 'babel',
            'onnxruntime', 'sphinx', 'IPython', 'jupyter', 'pygments', 'numba'],

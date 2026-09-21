@@ -226,3 +226,15 @@
 - **版本对齐 0.2.0**：package.json / sidecar version.py / 侧栏与「关于」页三处一致。
 - **重建与验收**（D:\pt-release）：battery 21/21（新 exe）；Setup-0.2.0 静默安装到自定义目录 ✓（exit 0、uninstaller/resources 落位、ARP 显示「AISBench 前缀复用测试器 v0.2.0」）、安装版启动 3s sidecar 就绪（frozen v0.2.0）✓、静默卸载目录与 ARP 干净且数据保留 ✓；portable 7/7 ✓；陈旧 Setup-0.1.0.exe 已删除避免误用。
 - **坑**：重建前 win-unpacked 里开着的应用实例会锁输出目录（EBUSY rmdir）——打包前先关旧实例；应用有单实例锁，安装版与 win-unpacked 同时启动时后来者静默退出。
+
+### 第十二轮（ModelScope tokenizer 资产入库：20 家族 259MB + 三处防呆）
+
+后台子代理交付 `assets/model/`：20 个官方组织 tokenizer 目录 / 99 文件 / 259.4MB（Qwen×6 / GLM×5 / DeepSeek×3 / Kimi×3 / MiniMax×2），SHA256 与远端逐一核对，transformers 4.57.6 + 5.17.0 双版本离线冒烟 20/20；交付物 manifest.json（逐文件 SHA256+兼容矩阵）/ README.md / 双版本 smoke jsonl。`assets/` 在 .gitignore 中，不入库。
+
+- **亲自复测证实的关键结论**：transformers **5.17.0 下 DeepSeek（LlamaTokenizer 系）中文编码返回 0 个 id**（文件本身经 tokenizers 直载 roundtrip 正确，4.57.6 正常）——而打包应用恰用 5.17.0，且注册表按「来源+名称」排序会让新用户默认选中字母序第一的 DeepSeek-R1 → 静默毁数据集。据此三处防呆：
+  1. `tokenizer_mgr.verify()` 增加中文编码往返探针——DeepSeek 现在报 `ok=False` + 明确错误文案（「测试加载」按钮可见），不再静默；
+  2. 前端 `pickDefaultTokenizer()`（ui.tsx）：默认优选 Qwen3-0.6B → Qwen3* → Qwen* → 首项（ConfigPage/SlaPage 接入，localStorage 记忆值仍优先且校验存在性）；
+  3. spec 打包策展：**排除 DeepSeek\*** 目录与 smoke 证据文件（manifest/README 保留），并补 `sentencepiece` + `tiktoken(_ext.openai_public)` 隐式依赖（Kimi/老 ChatGLM 的懒加载链路 PyInstaller 看不见）。
+- **注册扫描修复**（config.py）：原候选条件只认 tokenizer.json/vocab.json，Kimi（tiktoken.model + tokenization_*.py）与 glm-4-9b-chat（tokenizer.model + 自定义代码）4 个目录不注册；`_looks_like_tokenizer_dir()` 扩展为四标记 + tiktoken/自定义布局，22/22 注册（含 D:\Models）。
+- 验证：22 tokenizer 注册、glm-4-9b-chat/Kimi×3/Qwen3.5-9B/GLM-5/MiniMax-M2.1 `verify ok=True` 且中文探针非空、DeepSeek×2 被拦截；test_features/test_api 全绿；tsc 0 错误。
+- **待用户拍板**：是否重打安装包（当前 392MB 产物未含新 tokenizer，spec 策展后全量约 +221MB ≈ 613MB）。

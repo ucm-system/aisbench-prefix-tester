@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, track, useConnected } from "../api";
 import { navigate, useToast } from "../App";
-import { ConfirmModal, InfoTip, Modal, useLocalState } from "../ui";
+import { ConfirmModal, InfoTip, Modal, pickDefaultTokenizer, useLocalState } from "../ui";
 
 type Tok = { name: string; path: string; source: string };
 
@@ -102,12 +102,9 @@ export default function ConfigPage() {
     if (!connected) return;
     api.get<Tok[]>("/api/tokenizers").then((t) => {
       setTokenizers(t);
-      setCfg((c) => {
-        if (c.tokenizer) return c;
-        const saved = localStorage.getItem("pt-tokenizer");
-        if (saved && t.some((x) => x.name === saved)) return { ...c, tokenizer: saved };
-        return { ...c, tokenizer: t[0]?.name ?? "" };
-      });
+      setCfg((c) => (c.tokenizer
+        ? c
+        : { ...c, tokenizer: pickDefaultTokenizer(t, localStorage.getItem("pt-tokenizer")) }));
     }).catch(() => {});
     api.get<any[]>("/api/presets").then(setPresets).catch(() => {});
   }, [connected]);

@@ -60,16 +60,30 @@ def resolve(name_or_path: Optional[str]) -> str:
 
 
 def verify(name_or_path: str) -> dict:
-    """Try loading with AutoTokenizer; report vocab size and special tokens."""
+    """Try loading with AutoTokenizer; report vocab size and special tokens.
+
+    Also round-trips a Chinese sample: loading alone does NOT catch the
+    transformers-5.17 upstream bug where LlamaTokenizer-family tokenizers
+    (e.g. DeepSeek) load successfully but encode Chinese to zero ids — which
+    would silently corrupt generated datasets."""
     path = resolve(name_or_path)
     try:
         w = _load(path)
         vocab = w._tok.get_vocab()
+        ids = w._tok.encode("前缀缓存命中率校验")
+        if not ids:
+            return {
+                "ok": False, "path": path,
+                "error": "加载成功但中文编码返回 0 个 token（transformers 5.17 上游 bug，"
+                         "LlamaTokenizer 系如 DeepSeek 受影响；4.57.x 正常。"
+                         "建议换用其他 tokenizer 或锁定 4.57.x）",
+            }
         return {
             "ok": True,
             "path": path,
             "vocab_size": len(vocab),
             "special_tokens": len(w._tok.all_special_ids),
+            "zh_probe_tokens": len(ids),
         }
     except Exception as exc:  # noqa: BLE001 — report the reason to the UI
         return {"ok": False, "path": path, "error": str(exc)[:500]}

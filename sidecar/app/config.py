@@ -76,6 +76,19 @@ def bundled_assets_model_dir() -> Path | None:
     return p if p.is_dir() else None
 
 
+def _looks_like_tokenizer_dir(child: Path) -> bool:
+    """Standard fast-tokenizer layouts ship tokenizer.json / vocab files; the
+    tiktoken & custom-code layouts (Kimi, old ChatGLM) ship tokenizer_config
+    plus tokenizer.model / tiktoken.model / tokenization_*.py instead."""
+    if any((child / f).exists() for f in ("tokenizer.json", "vocab.json", "vocab.txt")):
+        return True
+    if (child / "tokenizer_config.json").exists():
+        return (child / "tokenizer.model").exists() \
+            or (child / "tiktoken.model").exists() \
+            or any(child.glob("tokenization_*.py"))
+    return False
+
+
 def default_tokenizer_candidates() -> list[dict]:
     """First-party tokenizer sources: user's local D:\\Models plus bundled assets."""
     found: list[dict] = []
@@ -93,7 +106,7 @@ def default_tokenizer_candidates() -> list[dict]:
                     continue
                 if child.name.lower() in seen:
                     continue
-                if (child / "tokenizer.json").exists() or (child / "vocab.json").exists():
+                if _looks_like_tokenizer_dir(child):
                     seen.add(child.name.lower())
                     src = "assets" if bundle and root == bundle else (
                         "local" if str(root).startswith("D:") else "assets")

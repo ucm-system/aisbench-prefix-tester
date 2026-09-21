@@ -195,3 +195,14 @@ export const fmtDur = (s: number) => {
   const m = Math.floor(s / 60), sec = Math.round(s % 60);
   return m > 0 ? `${m}m${sec.toString().padStart(2, "0")}s` : `${sec}s`;
 };
+
+/** 默认 tokenizer 优选链：Qwen3 系（最常用、4.x/5.x 双兼容）→ 任意 Qwen →
+ * 首项。避开字母序第一的 DeepSeek（transformers 5.17 下中文编码为空，上游 bug）。
+ * saved 为 localStorage 记忆值，仅当仍在列表中时生效。 */
+export function pickDefaultTokenizer(toks: { name: string }[], saved?: string | null): string {
+  if (saved && toks.some((t) => t.name === saved)) return saved;
+  return (toks.find((t) => t.name === "Qwen3-0.6B")
+    ?? toks.find((t) => /^Qwen3/.test(t.name))
+    ?? toks.find((t) => /^Qwen/.test(t.name))
+    ?? toks[0])?.name ?? "";
+}

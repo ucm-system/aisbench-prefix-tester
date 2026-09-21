@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, track, useConnected, type SlaJob, type SlaProbe } from "../api";
 import { DualAxisChart } from "../charts";
 import { useToast } from "../App";
-import { EmptyState, StatusBadge, InfoTip, fmtDur } from "../ui";
+import { EmptyState, StatusBadge, InfoTip, fmtDur, pickDefaultTokenizer } from "../ui";
 
 const HBM = "var(--hbm)", EXT = "var(--ext)", T_GREEN = "var(--green)";
 const ACTIVE_STATES = ["pending", "running", "ladder", "bisect"];
@@ -59,7 +59,7 @@ export default function SlaPage() {
     if (!connected) return;
     api.get<{ name: string }[]>("/api/tokenizers").then((t) => {
       setToks(t);
-      setForm((f) => ({ ...f, tokenizer: f.tokenizer || localStorage.getItem("pt-tokenizer") || (t[0]?.name ?? "") }));
+      setForm((f) => ({ ...f, tokenizer: f.tokenizer || pickDefaultTokenizer(t, localStorage.getItem("pt-tokenizer")) }));
     }).catch(() => {});
   }, [connected]);
 
