@@ -38,7 +38,7 @@ export type TSeries = {
 
 // ================================================================ TimeSeriesChart
 export function TimeSeriesChart({ series, height = 240, yMin = 0, yMax,
-                                  yFmt = (v) => String(Math.round(v)), rightFmt,
+                                  yFmt, rightFmt,
                                   events = [], bands = [], thresholds = [],
                                   emptyHint = "等待数据…", ariaLabel }: {
   series: TSeries[]; height?: number;
@@ -72,11 +72,23 @@ export function TimeSeriesChart({ series, height = 240, yMin = 0, yMax,
   const dx = x1 > x0 ? x1 - x0 : 1;
   const domain: [number, number] = zoom ?? [x0 - dx * 0.01, x1 + dx * 0.01];
 
-  const leftMax = Math.max(yMax ?? 0, niceMax(Math.max(1e-9, ...allPts.map((p) => p.y), 1)));
+  // R2.4：NaN 污染 Math.max 会让轴缩放整体塌缩（y 刻度恒「1」/整图不画）——
+  // 只用有限值计算值域，全 NaN 时退回 1
+  const finiteMax = (pts: Pt[]) => {
+    const fin = pts.map((p) => p.y).filter(Number.isFinite);
+    return fin.length ? Math.max(...fin) : 0;
+  };
+  const leftMax = Math.max(yMax ?? 0, niceMax(Math.max(1e-9, finiteMax(allPts), 1)));
   const leftMin = yMin;
-  const rMax = rightPts.length ? niceMax(Math.max(1e-9, ...rightPts.map((p) => p.y), 1)) : 1;
+  const rMax = rightPts.length
+    ? niceMax(Math.max(1e-9, finiteMax(rightPts), 1)) : 1;
   const rMin = 0;
-  const rf = rightFmt ?? yFmt;
+  // 自适应刻度格式：小值域（<10）保留 1 位小数，避免四舍五入后刻度全同
+  const autoFmt = (v: number) =>
+    Math.abs(v) >= 10 || Number.isInteger(v) ? String(Math.round(v))
+      : String(Math.round(v * 10) / 10);
+  const f = yFmt ?? autoFmt;
+  const rf = rightFmt ?? f;
 
   const iw = Math.max(10, w - pad.l - pad.r);
   const ih = Math.max(10, height - pad.t - pad.b);
@@ -184,7 +196,7 @@ export function TimeSeriesChart({ series, height = 240, yMin = 0, yMax,
               <g key={`g${i}`}>
                 <line x1={pad.l} y1={yy} x2={w - pad.r} y2={yy} className="chart-grid" />
                 <text x={pad.l - 6} y={yy + 3} className="chart-axis" fontSize="9" textAnchor="end">
-                  {yFmt(leftMax - ((leftMax - leftMin) * i) / 4)}
+                  {f(leftMax - ((leftMax - leftMin) * i) / 4)}
                 </text>
                 {hasRight && (
                   <text x={w - pad.r + 6} y={yy + 3} className="chart-axis" fontSize="9" textAnchor="start">
@@ -274,7 +286,7 @@ export function TimeSeriesChart({ series, height = 240, yMin = 0, yMax,
             <div key={i} className="ts" style={{ color: s.color }}>
               <i style={{ display: "inline-block", width: 9, height: 3, background: s.color,
                           marginRight: 6, borderRadius: 2, verticalAlign: "middle" }} />
-              {s.name}：{(s.axis === "right" ? rf : yFmt)(p.y)}
+              {s.name}：{(s.axis === "right" ? rf : f)(p.y)}
             </div>))}
         </div>)}
 
@@ -316,15 +328,17 @@ export function Donut({ items, center, caption }: {
 }
 
 // ================================================================ BarChart（对柱图 + Δ 标注，E2）
-export function BarChart({ groups, series, height = 200, labels, fmt, ariaLabel }: {
+export function BarChart({ groups, series, height = 200, labels, fmt, yMax, ariaLabel }: {
   groups: string[]; series: { name?: string; data: number[]; color: string }[];
   height?: number; labels?: string[][]; fmt?: (v: number) => string;
-  ariaLabel?: string;
+  yMax?: number; ariaLabel?: string;
 }) {
   const [ref, w] = useElemWidth<HTMLDivElement>(430);
   const pad = { l: 42, r: 8, t: 20, b: 24 };
   const all = series.flatMap((s) => s.data).filter((v) => Number(v) >= 0);
-  const ymax = niceMax((all.length ? Math.max(...all) : 1) * 1.12);
+  // R2.5：pct 图（命中率）显式给 yMax=100——全 0 数据时 niceMax(0)=1 会画出
+  // 「0–1」轴，看起来像忘了 ×100
+  const ymax = yMax ?? niceMax((all.length ? Math.max(...all) : 1) * 1.12);
   const iw = Math.max(10, w - pad.l - pad.r);
   const ih = Math.max(10, height - pad.t - pad.b);
   const gw = iw / Math.max(1, groups.length);

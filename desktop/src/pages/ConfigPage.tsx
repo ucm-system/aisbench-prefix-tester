@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, track, useConnected } from "../api";
 import { navigate, useToast } from "../App";
-import { ConfirmModal, InfoTip, Modal, pickDefaultTokenizer, useLocalState } from "../ui";
+import { ConfirmModal, InfoTip, Modal, pickDefaultTokenizer, theoreticalHitRate, useLocalState } from "../ui";
 
 type Tok = { name: string; path: string; source: string };
 
@@ -357,8 +357,7 @@ export default function ConfigPage() {
       : [{ test_name: v }]));
   };
 
-  const theoretical = (Number(parseFloat(String(cfg.repeat_rate)) || 0) *
-    (1 - 3 / Math.max(1, +cfg.input_len || 1)));
+  const theoretical = theoreticalHitRate(cfg.repeat_rate, +cfg.input_len || 1);
   const reachOk = effectivePods.filter((p) => podReach[p] === "ok").length;
   const activeTok = cfg.tokenizer
     ? tokenizers.find((t) => t.name === cfg.tokenizer)
@@ -413,7 +412,7 @@ export default function ConfigPage() {
               {urlParsed ? (
                 <>
                   <div className="field" style={{ flex: 2 }}>
-                    <label>目标（完整 URL 已生效，地址/端口已折叠）</label>
+                    <label>完整 URL <InfoTip text="当前由 URL 直连目标服务，地址/端口字段已折叠为解析摘要；点「清除 URL」可恢复分别填写。" /></label>
                     <input className="inp mono" data-t="url" value={cfg.url}
                       onChange={(e) => set({ url: e.target.value })} placeholder="http://host:port" />
                   </div>
@@ -429,7 +428,7 @@ export default function ConfigPage() {
                     <input className="inp mono" value={cfg.host_port} data-t="host_port"
                       onChange={(e) => set({ host_port: +e.target.value || 0 })} /></div>
                   <div className="field" style={{ maxWidth: 240 }}>
-                    <label>完整 URL（可选，Docker 场景覆盖地址+端口）</label>
+                    <label>完整 URL <InfoTip text="可选。Docker 场景填 http://host:port，将覆盖地址+端口两个字段。" /></label>
                     <input className="inp mono" data-t="url" value={cfg.url}
                       onChange={(e) => set({ url: e.target.value })} placeholder="http://host:port" />
                   </div>
@@ -717,50 +716,52 @@ export default function ConfigPage() {
               可按轮覆盖：<span className="mono">input_len output_len data_num concurrency request_rate prefix_num repeat_rate dp seed test_name</span>（留空 = 继承全局）
             </div>
             {roundsMode === "table" ? (
-              <table className="mini-table rounds-table">
-                <thead><tr>
-                  <th>名称</th><th>input_len</th><th>output_len</th><th>data_num</th><th>concurrency</th>
-                  <th>request_rate</th><th>prefix_num</th><th>repeat_rate</th><th>dp</th><th>seed</th><th></th>
-                </tr></thead>
-                <tbody>
-                  {rounds.map((r, i) => (
-                    <tr key={i} className="rounds-tr">
-                      <td><input className="inp" style={{ minWidth: 100 }} value={r.test_name ?? ""}
-                        placeholder={`R${i + 1}`}
-                        onChange={(e) => setRound(i, "test_name", e.target.value)} /></td>
-                      {ROUND_KEYS.map((k) => (
-                        <td key={k}>
-                          <input className={`inp mono inherit ${r[k] != null && r[k] !== "" ? "" : ""}`}
-                            style={{ width: 74 }} value={String(r[k] ?? "")} placeholder="继承"
-                            onChange={(e) => setRound(i, k, e.target.value === "" ? undefined : e.target.value)} />
+              <div className="table-scroll">
+                <table className="mini-table rounds-table">
+                  <thead><tr>
+                    <th>名称</th><th>input_len</th><th>output_len</th><th>data_num</th><th>concurrency</th>
+                    <th>request_rate</th><th>prefix_num</th><th>repeat_rate</th><th>dp</th><th>seed</th><th></th>
+                  </tr></thead>
+                  <tbody>
+                    {rounds.map((r, i) => (
+                      <tr key={i} className="rounds-tr">
+                        <td><input className="inp" style={{ minWidth: 90 }} value={r.test_name ?? ""}
+                          placeholder={`R${i + 1}`}
+                          onChange={(e) => setRound(i, "test_name", e.target.value)} /></td>
+                        {ROUND_KEYS.map((k) => (
+                          <td key={k}>
+                            <input className="inp mono inherit"
+                              style={{ width: 66 }} value={String(r[k] ?? "")} placeholder="继承"
+                              onChange={(e) => setRound(i, k, e.target.value === "" ? undefined : e.target.value)} />
+                          </td>
+                        ))}
+                        <td>
+                          <div style={{ display: "flex", gap: 4 }}>
+                            <button className="btn sm ghost" title="复制上一轮"
+                              disabled={i === 0}
+                              onClick={() => setRounds((rs) => {
+                                const next = [...rs];
+                                next[i] = { ...next[i - 1] };
+                                return next;
+                              })}>⧉</button>
+                            {roundHasOverride(r) && (
+                              <button className="btn sm ghost" title="清空覆盖，恢复继承全局"
+                                onClick={() => setRounds((rs) => rs.map((x, j) =>
+                                  j === i ? { test_name: x.test_name } : x))}>⟲</button>
+                            )}
+                            <button className="btn sm ghost" title="删除本轮"
+                              onClick={() => setConfirmModal({
+                                title: "删除轮次",
+                                message: `确认删除第 ${i + 1} 轮（${r.test_name || `R${i + 1}`}）？`,
+                                onOk: () => setRounds((rs) => rs.filter((_, j) => j !== i)),
+                              })}>✕</button>
+                          </div>
                         </td>
-                      ))}
-                      <td>
-                        <div style={{ display: "flex", gap: 4 }}>
-                          <button className="btn sm ghost" title="复制上一轮"
-                            disabled={i === 0}
-                            onClick={() => setRounds((rs) => {
-                              const next = [...rs];
-                              next[i] = { ...next[i - 1] };
-                              return next;
-                            })}>⧉</button>
-                          {roundHasOverride(r) && (
-                            <button className="btn sm ghost" title="清空覆盖，恢复继承全局"
-                              onClick={() => setRounds((rs) => rs.map((x, j) =>
-                                j === i ? { test_name: x.test_name } : x))}>⟲</button>
-                          )}
-                          <button className="btn sm ghost" title="删除本轮"
-                            onClick={() => setConfirmModal({
-                              title: "删除轮次",
-                              message: `确认删除第 ${i + 1} 轮（${r.test_name || `R${i + 1}`}）？`,
-                              onOk: () => setRounds((rs) => rs.filter((_, j) => j !== i)),
-                            })}>✕</button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             ) : (
               <div>
                 <textarea className="inp mono" rows={5} style={{ width: "100%" }}

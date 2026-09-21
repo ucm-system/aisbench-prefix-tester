@@ -21,7 +21,10 @@ export default function ComparePage() {
   useEffect(() => {
     if (!connected) return;
     api.get<RunSummary[]>("/api/runs").then((rs) => {
-      const manual = rs.filter((r) => r.kind !== "sla");
+      // SLA probe runs live on the SLA page; 0-round corpses (warmup-crashed
+      // legacy rows) have nothing to compare — keep the picker clean (R2.5)
+      const manual = rs.filter((r) => r.kind !== "sla"
+        && (r.summary?.rounds_done ?? 0) > 0);
       setRuns(manual);
       const pre = sessionStorage.getItem("pt-compare-sel");
       if (pre) {
@@ -209,9 +212,11 @@ export default function ComparePage() {
                               ))}
                             </div>
                           </div>
-                          {/* 对柱图（E2）：每个 run 一根柱，Δ% 相对首 run 标注在柱顶 */}
+                          {/* 对柱图（E2）：每个 run 一根柱，Δ% 相对首 run 标注在柱顶；
+                              R2.5：单组图 x 轴不留重复指标名，pct 图固定 0–100 轴 */}
                           <BarChart
-                            groups={[spec.label]}
+                            groups={[""]}
+                            yMax={spec.pct ? 100 : undefined}
                             series={result.runs.map((rid, i) => ({
                               name: shortName(rid),
                               data: [(() => {

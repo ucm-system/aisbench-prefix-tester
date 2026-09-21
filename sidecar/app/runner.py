@@ -286,9 +286,21 @@ def _execute(handle: RunHandle) -> None:
             else:
                 aisbench_args = aisbench_env.build_aisbench_command(
                     cfg["summarizer"], str(run_dir / "results"))
+            # phase-driven 1s sampling (R2.3): gauge detection alone misses the
+            # 2-3s request windows when polling at the idle interval
+            collector.set_active(True)
             before = collector_snapshot()
             ret = _run_phase(handle, argv_prefix, aisbench_args, stdout_log, stderr_log, work_path)
             after = collector_snapshot()
+            collector.set_active(False)
+            # R2.2: warmup exit code MUST be checked — a crashed warmup used to
+            # fall through as "completed · 0 rounds" (false-positive source)
+            if ret != 0 and not handle.cancelled.is_set():
+                _status(handle, "failed", exit_code=ret)
+                events.publish(run_id, "log", stream="stderr",
+                               line=f"AISBench exited with code {ret} (warmup phase)")
+                run_failed = True
+                break
             rate = metrics.compute_hit_rate(before, after)
             events.publish(run_id, "phase_rate", round=round_index, phase="warmup", rate=rate)
             perf, _ = parse_aisbench_log(str(run_dir / "aisbench.log"),
@@ -323,6 +335,8 @@ def _execute(handle: RunHandle) -> None:
                 ds_cfg_out = pt_configs / "datasets" / "gsm8k_gen_0_shot_cot_str_perf.py"
                 ds_cfg_out.parent.mkdir(parents=True, exist_ok=True)
                 aisbench_env.write_dataset_config(ds_link or data_file, str(ds_cfg_out))
+            # phase-driven 1s sampling (R2.3) — same for the full phase
+            collector.set_active(True)
             before = collector_snapshot()
             ret = _run_phase(handle, argv_prefix, aisbench_args, stdout_log, stderr_log, work_path)
             if ret != 0 and not handle.cancelled.is_set():
@@ -332,6 +346,7 @@ def _execute(handle: RunHandle) -> None:
                 run_failed = True
                 break
             after = collector_snapshot()
+            collector.set_active(False)
             rate = metrics.compute_hit_rate(before, after)
             events.publish(run_id, "phase_rate", round=round_index, phase="full", rate=rate)
             perf, _ = parse_aisbench_log(str(run_dir / "aisbench.log"),

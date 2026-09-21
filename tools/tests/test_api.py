@@ -240,6 +240,40 @@ def test_reconcile_orphans():
     print("reconcile orphans OK")
 
 
+def test_warmup_crash_marks_run_failed():
+    """R2.2 regression: a run whose FIRST phase (warmup) exits nonzero must be
+    failed — it used to fall through as 'completed' with 0 rounds (the runner
+    only checked exit codes in the full phase; also the exe-smoke
+    false-positive root cause)."""
+    stub = str(ROOT / "tools" / "tests" / "stub_aisbench.py")
+    r = c.put("/api/settings", headers=H, json={"aisbench_command": f"py -3.11 {stub} --fail-once"})
+    assert r.json()["ok"]
+    rid = c.post("/api/runs", headers=H,
+                 json={"config": RUN_CFG, "name": "warmup-crash"}).json()["run_id"]
+    d = wait_run(rid)
+    assert d["status"] == "failed", f"warmup crash must fail, got {d['status']}"
+    assert d.get("rounds") == [] or not d.get("rounds"), "no rounds should be recorded"
+    # restore the always-succeed stub for subsequent tests
+    c.put("/api/settings", headers=H, json={"aisbench_command": f"py -3.11 {stub}"})
+    print("warmup crash marks run failed OK")
+
+
+def test_zero_round_completed_backfill():
+    """R2.2 data repair: legacy 'completed' runs with no rounds rows are
+    re-marked failed at migration time (idempotent)."""
+    rid = store.create_run(RUN_CFG, name="legacy-dirty-completed")
+    store.update_run(rid, status="completed")  # no rounds inserted on purpose
+    from app import store as _s
+    with _s._LOCK:
+        _s._migrate(_s.connect())
+        _s.connect().commit()
+    d = store.get_run(rid)
+    assert d["status"] == "failed", d["status"]
+    assert "warmup" in (d.get("notes") or "")
+    store.delete_run(rid)
+    print("zero-round completed backfill OK")
+
+
 def main():
     global c
     with TestClient(app) as client:
@@ -260,6 +294,8 @@ def main():
         test_diagnosis_runtime_ready()
         test_run_detail_404()
         test_reconcile_orphans()
+        test_warmup_crash_marks_run_failed()
+        test_zero_round_completed_backfill()
     print("ALL API TESTS PASSED")
 
 

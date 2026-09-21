@@ -196,6 +196,19 @@ export const fmtDur = (s: number) => {
   return m > 0 ? `${m}m${sec.toString().padStart(2, "0")}s` : `${sec}s`;
 };
 
+/** repeat_rate 归一为 0–1 小数：「90%」→0.9、90→0.9、0.9→0.9。
+ * R2.1：parseFloat("90%")=90 已是百分数，公式里不能再 ×100。 */
+export function parseRepeatRate(v: string | number | null | undefined): number {
+  const n = parseFloat(String(v ?? "")) || 0;
+  return n > 1 ? n / 100 : Math.max(0, n);
+}
+
+/** 理论命中率（小数）：repeat_rate × (1 − 3/input_len)，3 为分隔符开销。 */
+export function theoreticalHitRate(repeatRate: string | number | null | undefined,
+                                    inputLen: number): number {
+  return parseRepeatRate(repeatRate) * (1 - 3 / Math.max(1, inputLen || 1));
+}
+
 /** 默认 tokenizer 优选链：Qwen3 系（最常用、4.x/5.x 双兼容）→ 任意 Qwen →
  * 首项。避开字母序第一的 DeepSeek（transformers 5.17 下中文编码为空，上游 bug）。
  * saved 为 localStorage 记忆值，仅当仍在列表中时生效。 */

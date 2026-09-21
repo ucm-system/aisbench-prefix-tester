@@ -83,8 +83,11 @@ class CacheState:
                     ext_matched += 1
             if ext_matched > 0:
                 self.c["ext_h"] += 1
-            self.c["ucm_q_tok"] += (len(blocks) - hbm_matched) * BLOCK_TOKENS
             self.c["ucm_hit_tok"] += ext_matched * BLOCK_TOKENS
+        # R1.4: query tokens must cover the WHOLE prompt (HBM-hit portion
+        # included) — vllm+UCM semantics are hbm_hit + ucm_hit + miss = query.
+        # Counting only the HBM-missed portion made hbm_hit > query (180%+).
+        self.c["ucm_q_tok"] += len(blocks) * BLOCK_TOKENS
         self.c["ucm_hbm_tok"] += hbm_matched * BLOCK_TOKENS
         # admit into stores (HBM LRU with capacity; external unbounded)
         for b in blocks:

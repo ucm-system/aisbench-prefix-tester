@@ -226,6 +226,23 @@
 - **R2.5 [P2] 对比页小疵**：柱图 x 轴类别名重复指标名（冗余）；Ext 图 y 轴 0-1 应为 0-100%；0 阶段的 run 仍出现在对比可选列表（应禁选或标注无数据）。
 - **R2.6 [P3] 一次偶发自动导航**：配置页操作中被跳到旧 run 监控页（仅复现一次，未定位；建议排查活动 run 横幅/路由守卫的自动跳转逻辑）。
 
+### R3 修复状态（2026-09-21 晚，R1/R2 全量整改 + 双端验证）
+
+| # | 修复 | 验证 |
+|---|------|------|
+| R1.1 | 轮次表包 `.table-scroll`（overflow-x:auto）+ 列宽收窄（输入 74→66、名称 100→90、单元格 padding 7/10→6/5） | ux_dom_check 40/40（两档视口文档级溢出=0） |
+| R1.2 | 两处 URL 标签缩短为「完整 URL」，说明移入 InfoTip | 同上（结构断言含 tokenizer/预设行） |
+| R1.3 | `.summary-rows` overflow-x:hidden + `.sr b` min-width:0/nowrap/ellipsis | 同上 |
+| R1.4 | mock `ucm_q_tok` 改为全量 prompt tokens（hbm+ucm+miss=query 自洽）；前端中心值 clamp ≤100% + 「⚠ 指标不自洽」标注 | refix verify：mock 中心 ≤100、无自洽标注 |
+| R2.1 | `parseRepeatRate`/`theoreticalHitRate` 共享帮助函数（>1 时 /100），ConfigPage/MonitorPage 接入 | 真实 run KPI「理论 ≈89.9%」、mock「≈87.2%」（修复前 8973.6%） |
+| R2.2 | runner warmup 后即判 `ret != 0` → failed + stderr 日志；store 迁移把历史「completed·0 阶段」脏数据回填为 failed（附注释） | test_api 新增 2 项回归全绿（--fail-once stub / 迁移回填） |
+| R2.3 | `Collector.set_active()` 阶段驱动：runner 在每个 phase 前后翻转，gauge 检测保留为补充 | 真实 run 阶段窗口采样中位 **1.2s**（n=41；修复前恒 5s） |
+| R2.4 | TimeSeriesChart 值域只取有限值（NaN 不再污染 niceMax）；默认刻度自适应（<10 保留 1 位小数）；移除 yFmt 签名默认值使自适应生效 | 真实页 13 paths/34 distinct 刻度，mock 16/30（修复前 0 paths/「1 1 1 1」） |
+| R2.5 | 对柱图 x 轴留空；pct 图显式 yMax=100；对比列表过滤 0 阶段 run | tsc/build + 复审走查路径 |
+| R2.6 | 未复现。已排除并修复同类「静默失败」：MonitorPage 数据加载增加连接门控（冷启动深链竞态会把 run 误标「记录不存在」且永不重试——本轮 mock 页 9696 chars 空壳即此因）。偶发跳转本身保持 P3 观察 | mock 页修复后 34733 chars 全渲染 |
+
+验证载体：`tools/tests/ux_refix_verify.py`（mock+真实 8101 双端 14/14 PASS：KPI 理论值、饼图中心、图表路径、刻度多样性、阶段采样间隔、命中率 95.7%）；test_api 18/18、test_features、ux_flow、ux_dom_check 全绿。
+
 ## 六、快速修复清单（半天内可完成的 8 个 quick win）
 
 1. favicon + 侧栏 logo（A4）

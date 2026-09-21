@@ -187,10 +187,10 @@ tr:hover td{background:var(--hover-row)}
 .cfg-grid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px;align-items:start}
 .cfg-form{display:flex;flex-direction:column;gap:24px;min-width:0}
 .summary-card{position:sticky;top:0;display:flex;flex-direction:column;max-height:calc(100vh - 120px)}
-.summary-rows{display:flex;flex-direction:column;overflow-y:auto;min-height:0}
+.summary-rows{display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;min-height:0}
 .summary-rows .sr{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px dashed var(--dash-line);font-size:12px}
 .summary-rows .sr span{color:var(--muted);flex:none}
-.summary-rows .sr b{font-variant-numeric:tabular-nums;font-weight:600;text-align:right;word-break:break-all}
+.summary-rows .sr b{font-variant-numeric:tabular-nums;font-weight:600;text-align:right;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sticky-actions{margin-top:auto;padding-top:14px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:9px}
 .sticky-actions .btn{width:100%}
 
@@ -219,7 +219,9 @@ tr:hover td{background:var(--hover-row)}
 .preset-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .preset-row .sel{width:170px}
 
-/* 轮次表 */
+/* 轮次表（R1.1：10+ 列窄卡片下横向滚动，不再压进右侧粘性栏） */
+.table-scroll{overflow-x:auto;border-radius:var(--radius-s)}
+.rounds-table td,.rounds-table th{padding:6px 5px}
 .rounds-table input.inherit{color:var(--text2)}
 .rounds-op{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:9px}
 

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, downloadLink, track, wsRun, type RoundRow } from "../api";
+import { api, downloadLink, track, useConnected, wsRun, type RoundRow } from "../api";
 import { Donut, TimeSeriesChart } from "../charts";
 import { useToast } from "../App";
-import { ConfirmModal, InfoTip, StatusBadge, downloadTextFile, toCsv, useLocalState, fmtDur } from "../ui";
+import { ConfirmModal, InfoTip, StatusBadge, downloadTextFile, theoreticalHitRate, toCsv, useLocalState, fmtDur } from "../ui";
 
 type Ev = { type: string; ts: number; [k: string]: any };
 type Sample = { ts: number; engines: Record<string, Record<string, number>>; ucm?: boolean };
@@ -74,9 +74,12 @@ export default function MonitorPage({ route }: { route: string }) {
     }
   }, [status, runId, detail]);
 
-  /* ---------------- data lifecycle（WS 拥有；回放与实时同一份 samples） ---------------- */
+  /* ---------------- data lifecycle（WS 拥有；回放与实时同一份 samples） ----------------
+   * 连接门控：冷启动深链（file:// 或容器直开 #/monitor/<id>）时 initConnection
+   * 可能尚未就绪——不门控会在竞态中把 run 误标 not_found 且永不重试 */
+  const connected = useConnected();
   useEffect(() => {
-    if (!runId) return;
+    if (!runId || !connected) return;
     let alive = true;
     let closed = false;
     setEvents([]); setLogs([]); setSamples([]); setPhaseRate(null);
@@ -178,7 +181,7 @@ export default function MonitorPage({ route }: { route: string }) {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [runId]);
+  }, [runId, connected]);
 
   /* stderr tab：轮询 stderr.log（C5） */
   const [stderrLines, setStderrLines] = useState<string[]>([]);
@@ -292,10 +295,9 @@ export default function MonitorPage({ route }: { route: string }) {
       return dt > 0 ? Math.max(0, ((b.f.gen_tok ?? 0) - (a.f.gen_tok ?? 0)) / dt) : 0;
     })() : 0;
 
-  /* 理论命中率（C4 参照基准） */
+  /* 理论命中率（C4 参照基准；R2.1：repeat_rate 归一为小数，不再二次 ×100） */
   const cfgEff = detail?.config?.rounds?.[0] ?? detail?.config ?? {};
-  const theoretical = Number(parseFloat(String(cfgEff.repeat_rate ?? "0")) || 0) *
-    (1 - 3 / Math.max(1, +(cfgEff.input_len ?? 2048) || 1));
+  const theoretical = theoreticalHitRate(cfgEff.repeat_rate, +(cfgEff.input_len ?? 2048));
   const hbmPct = (agg.hbm_hit_rate ?? 0) * 100;
   const extPct = (agg.ext_hit_rate ?? 0) * 100;
   const compPct = (extPct / 100 * (1 - hbmPct / 100) + hbmPct / 100) * 100;
@@ -332,20 +334,23 @@ export default function MonitorPage({ route }: { route: string }) {
     })).filter((b) => Number.isFinite(b.from));
   }, [roundsBounds]);
 
-  /* Breakdown（U5.5：中心 = 综合命中率） */
+  /* Breakdown（U5.5：中心 = 综合命中率；R1.4：UCM 口径防御——mock/异常服务的
+   * hit>query 会让 (h+u)/q 超过 100%，clamp 并打「指标不自洽」标注） */
   const qTok = latest.ucm_q_tok ?? 0;
   const hTok = latest.ucm_hbm_tok ?? 0;
   const uTok = latest.ucm_hit_tok ?? 0;
   const ucmTokens = ucm === true && qTok > 0;
+  const ucmConsistent = qTok > 0 && hTok >= 0 && uTok >= 0
+    && hTok + uTok <= qTok * 1.001 && hTok <= qTok && uTok <= qTok;
   const donutReady = ucmTokens ? true : hasAgg;
   const donutCenter = ucmTokens
-    ? `${((hTok + uTok) / qTok * 100).toFixed(1)}%`
+    ? `${Math.min(100, (hTok + uTok) / qTok * 100).toFixed(1)}%`
     : hasAgg ? `${compPct.toFixed(1)}%` : "—";
   const donutItems = ucmTokens
     ? [
-        { v: +(hTok / qTok * 100).toFixed(1), c: HBM },
-        { v: +(uTok / qTok * 100).toFixed(1), c: UCMC },
-        { v: +(Math.max(0, qTok - hTok - uTok) / qTok * 100).toFixed(1), c: MISS },
+        { v: +(Math.max(0, hTok / qTok * 100)).toFixed(1), c: HBM },
+        { v: +(Math.max(0, uTok / qTok * 100)).toFixed(1), c: UCMC },
+        { v: +(Math.max(0, (qTok - hTok - uTok) / qTok * 100)).toFixed(1), c: MISS },
       ]
     : [
         { v: +hbmPct.toFixed(1), c: HBM },
@@ -524,7 +529,6 @@ export default function MonitorPage({ route }: { route: string }) {
                 <div className="chart-empty offline">指标端点不可达 — 请检查采集端点（/metrics）</div>
               ) : (
                 <TimeSeriesChart height={280} yMax={undefined}
-                  yFmt={(v) => String(Math.round(v))}
                   rightFmt={(v) => `${Math.round(v)}%`}
                   events={boundaryEvents} bands={roundBands} emptyHint="等待指标采样…"
                   ariaLabel="队列深度与KV利用率时序图"
@@ -549,7 +553,7 @@ export default function MonitorPage({ route }: { route: string }) {
               {endpointOffline ? (
                 <div className="chart-empty offline">指标端点不可达</div>
               ) : (
-                <TimeSeriesChart height={280} yFmt={(v) => String(Math.round(v))} emptyHint="等待指标采样…"
+                <TimeSeriesChart height={280} emptyHint="等待指标采样…"
                   events={boundaryEvents} bands={roundBands} ariaLabel="吞吐时序图"
                   series={[
                     { name: "输出", color: T_GREEN, area: true, points: trend.genRate.map((y, i) => ({ x: trend.ts[i], y })) },
@@ -570,7 +574,7 @@ export default function MonitorPage({ route }: { route: string }) {
               {endpointOffline ? (
                 <div className="chart-empty offline">指标端点不可达</div>
               ) : (
-                <TimeSeriesChart height={280} yFmt={(v) => String(Math.round(v))} emptyHint="等待指标采样…"
+                <TimeSeriesChart height={280} emptyHint="等待指标采样…"
                   events={boundaryEvents} bands={roundBands} ariaLabel="延迟趋势图"
                   series={[
                     { name: "TTFT avg", color: T_ORANGE, points: trend.ttftT.map((y, i) => ({ x: trend.ts[i], y })) },
@@ -610,6 +614,10 @@ export default function MonitorPage({ route }: { route: string }) {
               <div className="chart-head"><b>前缀缓存查询构成</b>
                 <span className={`tag ${ucm ? "purple" : "gray"}`} style={{ fontSize: 10 }}>
                   {ucm ? "ucm: 已检测" : "无 ucm: 指标"}</span>
+                {ucmTokens && !ucmConsistent && (
+                  <span className="tag warn" style={{ fontSize: 10 }}
+                    title="命中 tokens 之和超过查询 tokens——服务的 UCM 计数器口径不自洽（或为 mock 数据），构成与中心值已按上限截断">⚠ 指标不自洽</span>
+                )}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
                 {donutReady ? (

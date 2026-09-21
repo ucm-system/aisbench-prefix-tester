@@ -219,6 +219,7 @@ class Collector:
         self.latest: dict[tuple, dict[str, float]] = {}
         self.ucm_detected = False
         self.active = False
+        self._phase_active = False
         self._prev_totals: Dict[str, float] = {}
         self._task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
@@ -271,13 +272,22 @@ class Collector:
                 logger.exception("on_sample callback failed")
         return any_ok
 
+    def set_active(self, flag: bool) -> None:
+        """Phase-driven cadence override (R2.3).
+
+        The runner flips this around every benchmark phase: pure gauge-based
+        detection is chicken-and-egg — a 5s idle-interval poll lands between
+        the 2-3s request bursts and never sees running>0, so the curve stays
+        empty. Phase-driven + detected both tighten the cadence."""
+        self._phase_active = bool(flag)
+
     def public_sample(self) -> dict:
         return {
             "ts": time.time(),
             "engines": {f"{p}|{e}|{w}": c for (p, e, w), c in self.latest.items()},
             "ucm_detected": self.ucm_detected,
             "pods_ok": True,
-            "active": self.active,
+            "active": self._phase_active or self.active,
         }
 
     async def _loop(self) -> None:
@@ -286,7 +296,8 @@ class Collector:
                 await self._poll_once()
             except Exception:  # noqa: BLE001
                 logger.exception("poll cycle failed")
-            wait = self.active_interval if self.active else self.interval
+            wait = self.active_interval if (self._phase_active or self.active) \
+                else self.interval
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=wait)
             except asyncio.TimeoutError:

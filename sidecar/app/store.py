@@ -74,6 +74,13 @@ def _migrate(con: sqlite3.Connection) -> None:
     if "deleted_at" not in cols:
         # soft delete (UI trash with undo window) — NULL = live row
         con.execute("ALTER TABLE runs ADD COLUMN deleted_at REAL")
+    # R2.2 backfill: warmup-phase crashes were once marked "completed" with
+    # zero rounds (the runner only checked exit codes in the full phase).
+    # A genuine completed run always has at least one rounds row.
+    con.execute(
+        "UPDATE runs SET status='failed',"
+        " notes=COALESCE(notes,'') || '[历史修复：warmup 退出码未检查，该 run 实际失败]'"
+        " WHERE status='completed' AND run_id NOT IN (SELECT run_id FROM rounds)")
     # backfill: SLA probe runs whose stored config lost the rounds marker
     con.execute(
         "UPDATE runs SET config_json = json_set(config_json, '$.rounds', json('[{}]'))"
